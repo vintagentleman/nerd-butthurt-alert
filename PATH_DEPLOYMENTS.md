@@ -154,20 +154,30 @@ environment variables. Compose reads it automatically.
 - **Reach for it when:** bootstrapping a recipe for the first time,
   or when the host itself is considered trusted and unshared.
 
-### Pattern B — `secret-tool` wrapper
+### Pattern B — local encrypted secret store + wrapper
 
-A host-side shell script calls `secret-tool lookup …` (libsecret) to
-fetch each secret from the desktop keyring, exports them as env
-vars, then invokes `docker compose up`. Nothing touches disk in
-plaintext form.
+A host-side shell script reads secrets from a local encrypted
+secret store, exports them as env vars, then invokes
+`docker compose up`. Nothing touches disk in plaintext form.
+
+Two well-supported backends, pick whichever you already use:
+
+- [`pass`](https://www.passwordstore.org/) — GPG-encrypted file
+  tree, queryable via `pass show <name>`. Pairs with `pass-otp` for
+  TOTP secrets. Works headlessly via a pre-configured `gpg-agent`.
+  Recommended where available.
+- `secret-tool` — libsecret CLI against the desktop keyring
+  (`gnome-keyring`, KWallet, etc.). Typically needs an active
+  desktop / PAM-unlocked session and is awkward on headless servers.
+
+Properties:
 
 - **Optimises for:** no plaintext at rest; unified secret store with
-  the rest of the desktop session.
-- **Downsides:** needs an active desktop / `gnome-keyring` session
-  (or equivalent PAM-unlocked keyring) when bringing containers up;
-  awkward on headless servers.
-- **Reach for it when:** running on a personal workstation or
-  laptop where the keyring is already part of the session.
+  the rest of the user's session.
+- **Downsides:** depends on the chosen backend being available and
+  unlocked at container-start time.
+- **Reach for it when:** running on a host with a local encrypted
+  secret store already configured.
 
 ### Pattern C — Docker secrets
 
@@ -212,7 +222,7 @@ self-contained: it covers the container image, the compose fragment,
 any entrypoint scripting, the secrets pattern used, and the resulting
 path-config entry.
 
-### OpenConnect + oathtool + libsecret
+### OpenConnect + oathtool + pass
 
 A `vantage`-role path that tunnels through a Cisco AnyConnect-style
 gateway guarded by a TOTP-SHA512 second factor. The container runs
@@ -308,18 +318,18 @@ default vpnc-script that ships with the Alpine package — we keep it
 explicit here so the behaviour does not silently change if the
 package's default shifts.
 
-**Secrets — Pattern B (`secret-tool` wrapper)** is a natural fit
-here: the credentials are long-lived, the host is typically a
-workstation with a keyring session, and the TOTP *secret* is exactly
-the sort of value you don't want sitting in a plaintext `.env`.
+**Secrets — Pattern B (`pass` wrapper)** is a natural fit here: the
+credentials are long-lived, `pass` works headlessly via `gpg-agent`,
+and the TOTP *seed* is exactly the sort of value you don't want
+sitting in a plaintext `.env`.
 
-Seed the keyring once:
+Seed the password store once:
 
 ```bash
-secret-tool store --label='openconnect server'   path openconnect field server
-secret-tool store --label='openconnect user'     path openconnect field user
-secret-tool store --label='openconnect password' path openconnect field password
-secret-tool store --label='openconnect otp seed' path openconnect field otp
+pass insert openconnect/server
+pass insert openconnect/user
+pass insert openconnect/password
+pass insert openconnect/otp_secret   # bare base32 seed; in-container oathtool computes the code
 ```
 
 Wrapper script (`up-openconnect.sh`) run in place of `docker compose up`:
@@ -328,10 +338,10 @@ Wrapper script (`up-openconnect.sh`) run in place of `docker compose up`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-export VPN_SERVER=$(secret-tool lookup path openconnect field server)
-export VPN_USER=$(secret-tool lookup path openconnect field user)
-export VPN_PASSWORD=$(secret-tool lookup path openconnect field password)
-export VPN_OTP_SECRET=$(secret-tool lookup path openconnect field otp)
+export VPN_SERVER=$(pass show openconnect/server)
+export VPN_USER=$(pass show openconnect/user)
+export VPN_PASSWORD=$(pass show openconnect/password)
+export VPN_OTP_SECRET=$(pass show openconnect/otp_secret)
 
 exec docker compose up -d openconnect-vantage
 ```
@@ -339,6 +349,9 @@ exec docker compose up -d openconnect-vantage
 Patterns A (plaintext `.env` with the same four variable names) and
 C (four files under `secrets:` mounted at `/run/secrets/`, entrypoint
 reads them with `cat`) apply equally — pick by host, not by recipe.
+`secret-tool` is a drop-in alternative to `pass` for hosts with a
+running libsecret keyring; substitute `secret-tool lookup` for `pass
+show` in the wrapper.
 
 **Path-config entry**:
 
@@ -735,7 +748,7 @@ in `./secrets/hysteria_auth`, compose mounts it at
 Nothing Hysteria-related is in any environment variable that
 `docker inspect` would leak. Patterns A (auth string as
 `HY_AUTH` in `.env`) and B (wrapper script pulling it from
-`secret-tool`) apply equally.
+`pass` or `secret-tool`) apply equally.
 
 **6. Path-config entry**:
 

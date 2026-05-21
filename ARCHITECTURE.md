@@ -83,30 +83,37 @@ flowchart LR
   probe --> storage[(SQLite)]
   probe --> signals
   signals --> storage
-  probe --> sse[SSE stream]
-  signals --> sse
-  sse --> ui[Dashboard]
-  ui --> api[Management API]
+  probe --> ws[WebSocket]
+  signals --> ws
+  ws --> ui[Dashboard]
+  ui --> api[HTTP API]
   api --> storage
 ```
 
 ### Probe data flow (server-driven, one direction)
 
-1. The **scheduler** (in-process, cron-like) fires every configured
-   interval.
+1. The **scheduler** (in-process, via `croner`) fires every
+   configured interval. The scheduler enforces no-overlap semantics
+   — the next firing is held until the prior handler's Promise
+   settles — to keep slow probes from queuing on top of each other.
 2. For each target, the **probe worker** dispatches one probe per
    configured path, concurrently. Each probe opens a connection
    through its path's SOCKS5 URL (or direct), performs the configured
    check types (HTTP GET at minimum; optionally DNS-only lookup,
    TCP-connect-only), captures raw evidence, and returns an outcome.
-3. Each probe outcome is persisted: hot columns (target, path,
-   timestamp, success, total duration) plus a JSON payload blob.
+3. Each probe outcome is persisted to the `probes` table: hot
+   columns (target, path, check type, timestamp, runtime, reached
+   stage, first failure code, …) plus the full payload as a JSON
+   blob. See `STORAGE_SCHEMA.md` for the column-level detail and
+   `PROBE_PAYLOAD.md` for the payload structure.
 4. The **signals engine** evaluates the new probe — along with recent
    history for that target — against its rule set, persisting any
    fresh signals.
-5. The **SSE layer** pushes delta events to connected dashboard
-   clients: one event per probe, one per signal. The dashboard's
-   matrix view updates cell state accordingly.
+5. The **WebSocket layer** pushes delta events to connected
+   dashboard clients: one message per probe insertion, one per
+   signal transition, one per target mutation. The dashboard's
+   matrix view updates cell state accordingly. See `API.md` for
+   message types and shapes.
 
 ### Configuration and command flow (inbound)
 
@@ -124,8 +131,10 @@ Two distinct inbound channels feed the system:
   the next scheduler tick. Targets are the one entity that changes
   often enough to justify a UI.
 
-SSE (server → UI) and management HTTP (UI → server) are separate
-one-way channels, not a shared bidirectional pipe.
+The WebSocket carries server → client deltas; the HTTP API carries
+UI → server mutations and on-demand reads. WS is structurally
+bidirectional but v0 uses it server-push only; client-originated
+WS messages are reserved for future subscriptions / filters.
 
 ## Component architecture
 
@@ -133,34 +142,43 @@ All components live in a single process.
 
 **Probe engine.** Runs scheduled probes. Holds no persistent state
 beyond in-flight probe futures. Takes a `(target, path)` as input;
-produces a probe outcome. Delegates HTTP/TLS/DNS mechanics to a thin
-wrapper over Bun's HTTP and `tls` primitives, plus a SOCKS5 agent.
-Check types (`http_get`, `dns_lookup`, `tcp_connect`) are the
-extensibility seam.
+produces a probe outcome. `http_get` is backed by Playwright (see
+`PROBE_PAYLOAD.md`); `dns_lookup` and `tcp_connect` go through
+`node:dns` and `node:net` respectively. Check types (`http_get`,
+`dns_lookup`, `tcp_connect`) are the extensibility seam.
 
 **Path provider.** Reads path definitions from the config file at
 startup and exposes the live list to the probe engine. The app does
 not start, stop, or health-check the proxy processes themselves —
-that is the user's responsibility. Reference deployment recipes ship
-alongside as worked examples, not runtime dependencies.
+that is the user's responsibility. Reference deployment recipes
+ship alongside as worked examples in `PATH_DEPLOYMENTS.md`, not as
+runtime dependencies.
 
-**Storage.** SQLite via `bun:sqlite`. Tables for targets, probes
+**Storage.** SQLite via `node:sqlite`. Tables for targets, probes
 (with a JSON payload column absorbing schema evolution), and
-signals. Retention policy and rollup strategy deferred to a
-sub-document. Note: paths are *not* stored in the database in v1;
-they live in the config file and are re-read on restart.
+signals. Schema, indexes, retention policy, and lifecycle details
+in `STORAGE_SCHEMA.md`. Paths are *not* stored in the database in
+v1; they live in the config file and are re-read on restart.
 
-**Signals engine.** A set of pure functions, each evaluating some
-slice of probe data and returning 0..n signals. Runs after each
-probe. Rules are plain TypeScript modules; adding a rule means
-adding a function — no schema change, no registration ceremony.
-Tuning constants for rules live in the config file, not in code.
+**Signals engine.** A set of pure-ish async functions, each
+evaluating some slice of probe data and returning 0..n signals
+(fire / clear / no-op). Runs after each probe. Rules are plain
+TypeScript modules under `src/signals/rules/`; adding a rule means
+adding a file — auto-discovered at startup, no central registry.
+All thresholds and confidence values live in the config file, not
+in code. Catalogue and contract in `SIGNAL_RULES.md`.
 
-**API + SSE layer.** SvelteKit server routes. JSON endpoints for
-CRUD on targets, plus an SSE endpoint streaming probe and signal
-deltas. SvelteKit form actions back the management UI. Paths are
-not managed through this API in v1 (they come from the config
-file).
+**API + WebSocket layer.** Two surfaces under `/api/v1/`. HTTP
+JSON REST endpoints for targets (CRUD) and read-only queries
+against probes, signals, paths, plus a `dashboard/snapshot`
+convenience endpoint for first paint. A WebSocket channel at
+`/api/v1/events` pushes live deltas (probe insertions, signal
+transitions, target mutations) to connected dashboard clients.
+Zod v4 schemas in `src/api/schemas/` are the single source of
+truth — used for server-side request validation and SvelteKit
+client typing. SvelteKit form actions back the management UI and
+share the same schemas. Paths are read-only through this API in v1
+(they come from the config file). See `API.md`.
 
 **Dashboard.** SvelteKit frontend. Primary view is a target × path
 matrix with live status cells. Secondary views (per-probe drill-in,
@@ -173,22 +191,27 @@ network).
 
 ## Technology choices
 
-**Bun runtime.** Chosen over Node primarily to get `bun:sqlite`
-(native, no native-bindings bundling pain), first-class TypeScript
-execution without a separate compile step, single-binary deployment
-via `bun build --compile`, and a cleaner fetch/tls API surface.
-TypeScript throughout.
+**Node.js 26 runtime.** Built-in `node:sqlite` (stable since Node
+24, no `better-sqlite3` bundling pain), stable Temporal API for
+datetime handling, native WHATWG `fetch`, built-in test runner, and
+the broader ecosystem maturity that comes with Node. TypeScript
+throughout (via `--experimental-strip-types`, `tsx`, or pre-compile
+depending on deployment shape). An earlier draft of this spec chose
+Bun for some of the same affordances; Node 26 closed the gap that
+originally favored Bun, and the broader ecosystem tipped the
+balance.
 
 **SvelteKit, as a monolith.** One repo, one process: the probe
-engine, the JSON/SSE API, and the UI all live inside one SvelteKit
-project. Rationale: the OONI-ish data trajectory (time-series views,
-cross-filtering, per-probe drill-in) will want a component framework
-sooner rather than later, and SvelteKit's form actions cover the
-management surface cleanly without bespoke glue. `adapter-bun` for
-production builds.
+engine, the HTTP + WebSocket API, and the UI all live inside one
+SvelteKit project. Rationale: the OONI-ish data trajectory (time-
+series views, cross-filtering, per-probe drill-in) will want a
+component framework sooner rather than later, and SvelteKit's form
+actions cover the management surface cleanly without bespoke glue.
+`adapter-node` for production builds.
 
-**bun:sqlite.** Single-file DB, zero deployment friction, more than
-fast enough for the probe throughput at hand.
+**`node:sqlite`.** Built-in to Node since v22 (stable in v24+),
+single-file DB, zero deployment friction, more than fast enough for
+the probe throughput at hand.
 
 **Shoelace / Web Awesome.** Web-components UI library. Drops in as
 HTML tags, framework-neutral, covers the dashboard primitives
@@ -196,9 +219,24 @@ HTML tags, framework-neutral, covers the dashboard primitives
 Tailwind or a shadcn-style toolchain. Interoperates with Svelte
 without wrapping.
 
+**Playwright.** Headless browser automation for `http_get` probes
+(Chromium / Firefox / WebKit). Picked over `curl-impersonate` and
+plain `fetch` because the browser *is* the browser — no
+fingerprint-spoofing shim — and CDP gives structured network events
+natively. Deployment cost: ~200 MB browser bundle. Acceptable for a
+home-server tool. See `PROBE_PAYLOAD.md` for the per-hop event
+shape it produces.
+
+**Other notable dependencies.** [`croner`](https://github.com/Hexagon/croner)
+for in-process cron-style scheduling with overlap protection.
+[Zod v4](https://zod.dev) for shared HTTP / WebSocket schemas.
+[`ws`](https://github.com/websockets/ws) as the WebSocket server
+library, attached to SvelteKit's HTTP server via `adapter-node`
+hooks.
+
 ## Deployment shape
 
-One Bun + SvelteKit process. Runs locally or on a small VPS. Reads
+One Node + SvelteKit process. Runs locally or on a small VPS. Reads
 and writes one SQLite file plus one config file. Serves the
 dashboard on a port.
 
@@ -220,31 +258,50 @@ iteration. Each becomes its own file.
 - **Reference path deployments** (`PATH_DEPLOYMENTS.md`). The path
   contract, the `role` / `tags` schema, DNS policy default, secrets-
   handling patterns, and a cookbook of Dockerfiles + compose recipes
-  for recommended proxy setups (OpenConnect+oathtool+libsecret,
-  SpoofDPI, Tor, …).
+  for recommended proxy setups (OpenConnect+oathtool+pass, SpoofDPI,
+  Tor, …).
 - **Probe payload specification** (`PROBE_PAYLOAD.md`). The three
   check types (`http_get` / `dns_lookup` / `tcp_connect`), the
-  per-hop JSON shape of `http_get` (OONI-inspired field names,
-  Playwright-native per-hop structure), flat shapes for the simpler
-  two, the `reached_stage` + `termination_mode` + per-op `failure`
-  factual model, body-shape signals, and the error-code taxonomy.
+  per-hop JSON shape of `http_get` (Playwright-native per-hop
+  structure, OONI influence at the per-op record level), flat shapes
+  for the simpler two, the `reached_stage` + `termination_mode` +
+  per-op `failure` factual model, body-shape signals, and the
+  error-code taxonomy.
+- **Storage schema** (`STORAGE_SCHEMA.md`). SQLite tables for
+  `targets`, `probes`, `signals` (paths stay in config). Hot columns
+  + JSON payload blob. Signal lifecycle (active / cleared, rule-
+  responsible clearing). 30-day retention, no rollups in v1. TEXT
+  ISO 8601 datetimes.
+- **Signal rule catalogue** (`SIGNAL_RULES.md`). The `Rule`
+  contract (pure-ish async function, three-outcome model), the
+  storage reader API rules use to query history, the v1 catalogue
+  of 15 rules across 6 categories (TLS / DNS interference, target-
+  initiated unavailability, reachability, cross-path comparison,
+  perf), and an "adding your own rule" appendix with a worked
+  example. Rules auto-discovered from `src/signals/rules/`. All
+  thresholds and confidence values are config (under
+  `rules.<rule_name>.*`), not code constants.
+- **Configuration file format** (`CONFIG_FILE.md`). TOML, layered
+  (`config/default.toml` → `<NODE_ENV>.toml` → `local.toml`),
+  node-config-style. Schema covers server / storage / scheduler /
+  probe defaults / body-shape detection / paths / per-rule
+  config. Secrets stay out; v0 has no hot-reload (restart to
+  apply).
+- **HTTP and WebSocket API** (`API.md`). JSON REST endpoints under
+  `/api/v1/` for targets (CRUD), paths (read-only), probes and
+  signals (read), plus `GET /api/v1/dashboard/snapshot` for first
+  paint. WebSocket channel at `/api/v1/events` multiplexing
+  `probe.inserted` / `signal.{fired,updated,cleared}` /
+  `target.{created,updated,deleted}`. Shared Zod v4 schemas as the
+  single source of truth for both ends. v0 has no auth (localhost-
+  bound) and no event replay (snapshot re-fetch on reconnect).
 
 ### Pending
 
-- **Storage schema.** Column-level detail, indexes, retention
-  policy, rollup / downsampling strategy.
-- **Signal rule catalogue.** The first-pass rules (response-size
-  cutoff at suspicious boundaries, TLS truncation, DNS private-IP
-  returns, RST-after-ClientHello, cross-path cert fingerprint
-  divergence, etc.) and the rule module convention.
-- **API / SSE event shape.** JSON wire formats for endpoints and
-  streaming events.
-- **Dashboard view inventory.** Matrix, drill-in, timeline, signal
-  browser. Navigation and interaction details.
-- **Configuration file format.** Exact schema of the static config
-  file (path definitions, signal rule tuning constants, cadence
-  defaults, server port), file format choice (TOML / YAML / JSON),
-  and reload semantics.
+- **Dashboard view inventory** (`DASHBOARD.md`). The matrix and
+  its cell semantics, per-probe drill-in, per-target time-series,
+  signals presentation, targets management page, paths overview,
+  responsive layout commitments, and Shoelace integration depth.
 
 ## Out of scope entirely
 

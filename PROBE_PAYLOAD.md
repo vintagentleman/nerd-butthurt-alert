@@ -30,11 +30,10 @@ Every probe is typed. Three check types exist in v1:
   emitted traffic is that of a real browser, not a spoofing layer.
 - **`dns_lookup`** — standalone DNS resolution. No TCP, no TLS, no
   HTTP. Cheap, isolates DNS-manipulation attribution from anything
-  downstream. Backed by Bun's `node:dns`.
+  downstream. Backed by `node:dns`.
 - **`tcp_connect`** — TCP handshake only (optionally preceded by DNS
   if `url` references a hostname rather than an IP). No TLS, no HTTP.
-  Cheap, isolates reachability attribution. Backed by Bun's
-  `node:net`.
+  Cheap, isolates reachability attribution. Backed by `node:net`.
 
 Each target is typically probed with one or more check types per
 scheduler tick; cadences are independent per check type. A reasonable
@@ -105,7 +104,6 @@ rules compose their own predicates over those fields. See
 
 ```jsonc
 "config": {
-  "target_url": "https://example.com/",
   "method": "GET",
   "impersonation_profile": "chromium-124",  // null for baseline
   "follow_redirects": true,
@@ -119,8 +117,9 @@ rules compose their own predicates over those fields. See
 ```
 
 The config echo means any configuration drift is visible in probe
-history. All of these fields except `target_url` and `method` may be
-overridden per target via the configuration file.
+history. All of these fields except `method` may be overridden per
+target via the configuration file. The probed URL itself isn't echoed
+here — it lives at envelope-level `url`.
 
 ### `hops[]` — one record per redirect
 
@@ -294,7 +293,6 @@ simple signal rules do not have to walk the hops array.
 ```jsonc
 "data": {
   "config": {
-    "hostname": "example.com",
     "query_types": ["A", "AAAA"],         // array; both queried by default
     "resolver_address": "1.1.1.1",
     "resolver_type": "udp53",              // system | udp53 | dot | doh
@@ -340,7 +338,6 @@ The probe detects which and optionally runs DNS first.
 ```jsonc
 "data": {
   "config": {
-    "target": "example.com:443",
     "timeout_ms": 5000,
     "attempt_all_ips": true                  // try every IP returned, not just first
   },
@@ -482,10 +479,10 @@ the raw `snippet` itself.
   `Security.*`, `Page.frameNavigated`) are captured and transformed
   into the per-hop records. One browser context per path, reused
   across probes for that path; one page per probe, closed after.
-- **`dns_lookup` is backed by Bun's `node:dns`.** The `dns.Resolver`
+- **`dns_lookup` is backed by `node:dns`.** The `dns.Resolver`
   class is configured per probe with the chosen resolver; queries
   are issued and results transformed. Roughly 20 lines of code.
-- **`tcp_connect` is backed by Bun's `node:net`.** A direct
+- **`tcp_connect` is backed by `node:net`.** A direct
   `net.createConnection` with timeout and error-to-`failure` mapping.
   Roughly 30 lines of code.
 - **OONI inspiration is at the per-operation record level, not the
@@ -518,6 +515,11 @@ later iterations:
   across impersonation profiles) — signal-rule-catalogue.
 - **Full OONI failure-string cross-reference table.** Not in v0; to
   be produced alongside probe engine implementation.
+- **Alternative `http_get` backends.** Playwright is the v0
+  choice. The CDP transformation layer is the durable design; the
+  harness around it (Playwright vs. a future headless-Chrome
+  driver, vs. anything else that speaks CDP per-context with
+  independent network state) is replaceable.
 
 ---
 
