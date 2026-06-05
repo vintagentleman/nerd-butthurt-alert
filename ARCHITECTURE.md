@@ -183,7 +183,9 @@ share the same schemas. Paths are read-only through this API in v1
 **Dashboard.** SvelteKit frontend. Primary view is a target × path
 matrix with live status cells. Secondary views (per-probe drill-in,
 target time-series, signal browser) are deferred to the dashboard
-sub-document. Styling and primitives via Shoelace web components. A
+sub-document. Interactive primitives are native elements
+(`<dialog>`, `<details>`, native form controls, Popover API) — no
+component library; styling methodology in `STYLING.md`. A
 responsive layout is an architectural baseline — the dashboard is
 expected to be usable from a phone (typical scenario: the tool
 running on a home server, monitored from a phone on the same
@@ -213,11 +215,16 @@ actions cover the management surface cleanly without bespoke glue.
 single-file DB, zero deployment friction, more than fast enough for
 the probe throughput at hand.
 
-**Shoelace / Web Awesome.** Web-components UI library. Drops in as
-HTML tags, framework-neutral, covers the dashboard primitives
-(badges, dialogs, tabs, dropdowns, tooltips) without dragging in
-Tailwind or a shadcn-style toolchain. Interoperates with Svelte
-without wrapping.
+**Native platform primitives — no component library.** Every
+interactive primitive (`<dialog>`, `<details>`, native form
+controls, Popover API + CSS anchor positioning) is native, styled
+with plain CSS over Svelte's scoped styles. No Shoelace, no Bits UI,
+no Tailwind. Design tokens via [Open Props](https://open-props.style/)
+(zero-runtime CSS custom properties) layered under our own semantic
+tokens; charts via [uPlot](https://github.com/leeoniya/uPlot) when
+the time-series view lands. Browser target is `baseline newly
+available`, linter-enforced (see `TOOLING.md`). Full methodology in
+`STYLING.md`.
 
 **Playwright.** Headless browser automation for `http_get` probes
 (Chromium / Firefox / WebKit). Picked over `curl-impersonate` and
@@ -295,13 +302,37 @@ iteration. Each becomes its own file.
   `target.{created,updated,deleted}`. Shared Zod v4 schemas as the
   single source of truth for both ends. v0 has no auth (localhost-
   bound) and no event replay (snapshot re-fetch on reconnect).
+- **Tooling and conventions** (`TOOLING.md`). Developer-side
+  toolchain — pnpm, TypeScript strict, ESLint 10+ flat config,
+  Prettier, Stylelint, Markuplint, markdownlint-cli2, svelte-check,
+  Vitest. Conventional Commits via commitlint with a project-
+  specific scope list. Native Git hooks via `core.hooksPath` +
+  `.githooks/` + a `prepare` script (no lefthook / husky / lint-
+  staged). Push policy: no agent autopush. Browser target is
+  `baseline newly available`, enforced by `stylelint-plugin-use-
+  baseline` (CSS) + `eslint-plugin-compat` (JS). CI / Renovate /
+  spellcheck explicitly out of scope.
+- **Dashboard** (`DASHBOARD.md`). The **structural** layer only —
+  view inventory + routes (matrix, probe drill-in, signals
+  sidebar + browse page, targets management, paths overview),
+  component decomposition (shared `SignalList`, bespoke matrix
+  grid), per-view data dependencies, the Svelte store model fed by
+  the WebSocket stream, responsive strategy (matrix → per-target
+  card list on narrow screens), and the native-primitive mapping
+  (no component library; `<dialog>` / `<details>` / native form
+  controls; cell-hover tooltip as a desktop progressive
+  enhancement). Visual design is explicitly out of scope and
+  iterated separately. Time-series view is post-MVP.
+- **Styling architecture** (`STYLING.md`). CSS methodology — cascade
+  layers, two-tier design tokens (Open Props primitives + semantic
+  layer), `light-dark()` theming, container-queries-for-components /
+  media-queries-for-viewport, Svelte scoped styles (so no BEM-style
+  naming methodology), logical properties. Architecture is firm;
+  concrete values set during visual exploration.
 
-### Pending
-
-- **Dashboard view inventory** (`DASHBOARD.md`). The matrix and
-  its cell semantics, per-probe drill-in, per-target time-series,
-  signals presentation, targets management page, paths overview,
-  responsive layout commitments, and Shoelace integration depth.
+All sub-documents are now drafted (v0). `CLAUDE.md` — consolidating
+the durable agent-facing conventions — is the remaining
+documentation artifact before/alongside implementation.
 
 ## Out of scope entirely
 

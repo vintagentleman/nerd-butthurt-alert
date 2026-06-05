@@ -91,11 +91,14 @@ export const TargetUpdate = Target.pick({
   probe_config_overrides: true,
 }).partial();
 
-// Generic paginated envelope.
+// Generic paginated envelope — the single list-response shape used
+// by every list endpoint in the API.
 export const Paginated = <T extends z.ZodTypeAny>(item: T) =>
   z.object({
     items: z.array(item),
-    next_cursor: z.number().int().nullable(),
+    total: z.number().int(),    // total rows matching the filters
+    limit: z.number().int(),    // page size actually applied
+    offset: z.number().int(),   // offset actually applied
   });
 ```
 
@@ -150,37 +153,47 @@ Standard codes (extensible):
 
 ### Pagination
 
-Cursor pagination on list endpoints whose data grows with retention
-(`probes`, `signals`):
+**Offset pagination, one model for the whole API.** Cursor
+pagination was considered and rejected: it pays off only for
+sequential traversal of a large, append-stable list ordered by a
+unique monotonic key (the infinite-scroll pattern), and no list
+endpoint here exercises that. Probes are read window-filtered or
+by-id, never scrolled end-to-end; signals are browsed with
+arbitrary sort on mutable columns (`confidence`, `last_seen_at`)
+where a cursor would be unstable. Offset composes with any sort,
+yields a `total` for page-of-pages UI, and its deep-scan cost never
+bites because nothing pages deep. (A future bulk-export crawler
+would want streaming, not offset *or* cursor — deferred.)
 
-- Request: `?cursor=<integer>` — exclusive lower bound from the
-  previous page's `next_cursor`. Optional; omit to start from the
-  most recent.
-- Request: `?limit=<n>` — caps at 1000 (silently clamped), defaults
-  to 100.
-- Response: `next_cursor: <integer> | null` — value to pass as the
-  next request's `cursor`. `null` when no more results.
+Universal query params on every list endpoint:
 
-Results are ordered by the natural time field (`started_at` for
-probes, `fired_at` for signals) **descending**.
+- `?limit=<n>` — page size; caps at 1000 (silently clamped),
+  defaults to 100.
+- `?offset=<n>` — rows to skip; defaults to 0.
 
-Time-window filters (`since`, `until`) compose with cursor.
+Optional, where an endpoint supports sorting:
 
-**Endpoints that are intentionally NOT paginated:** `GET
-/api/v1/targets` and `GET /api/v1/paths`. Both lists are bounded by
-design — targets by the user's appetite for adding them, paths by
-the TOML config file's contents — and pagination on
-bounded-by-design lists is machinery that adds boilerplate without
-buying anything.
+- `?sort=<field>` — allowed fields are endpoint-specific (listed
+  per endpoint).
+- `?order=asc|desc` — defaults to `desc`.
+
+Filters are endpoint-specific and documented per endpoint. The
+`limit` / `offset` / `sort` / `order` **names** are identical
+everywhere, so client code and the generic `Paginated<T>` DTO are
+uniform across the API.
 
 ### Common response envelope
 
 Single-resource responses: the resource object directly.
 
-List responses: `{ items: T[] }`, plus `next_cursor: number | null`
-on the paginated endpoints. Client code that consumes both
-paginated and un-paginated endpoints can use a single union type
-and simply check for the presence of `next_cursor`.
+List responses: the generic `Paginated<T>` envelope —
+`{ items, total, limit, offset }` — for **every** list endpoint,
+without exception. Bounded lists (`targets`, `paths`) carry no
+real pagination logic: they always return their full set in a
+single page (`offset: 0`, `total === items.length`, `limit` the
+applied default), but they use the identical envelope so client
+code never branches on endpoint identity. One DTO, one generic
+type, zero special cases.
 
 ## Endpoint reference
 
@@ -188,16 +201,17 @@ and simply check for the presence of `next_cursor`.
 
 #### `GET /api/v1/targets`
 
-List all targets. **Intentionally not paginated** — the list is
-bounded by the user's appetite for adding targets via the UI, with
-a realistic ceiling well under what's worth paging. Returns the
-full list in one response.
+List all targets. The list is bounded by design (the user's
+appetite for adding targets), so this endpoint applies no real
+pagination — it always returns the full set in one page. It still
+uses the uniform envelope.
 
 Query params: `enabled` (`true` / `false`, optional filter).
+`limit` / `offset` are accepted but the full set is returned
+regardless.
 
-Response: `{ items: Target[] }`. (Same envelope shape as paginated
-endpoints, just without `next_cursor` — client code that consumes
-both can ignore the missing field.)
+Response: `Paginated<Target>` (`total === items.length`,
+`offset: 0`).
 
 #### `POST /api/v1/targets`
 
@@ -241,13 +255,15 @@ Response: 204 No Content.
 #### `GET /api/v1/paths`
 
 List all configured paths (from the config file, not the database).
-**Intentionally not paginated** — paths are declared in TOML, so the
-list is bounded by what the user has typed into the config file.
-Returns the full list in one response.
+Bounded by design (the TOML file's contents), so no real pagination
+— always returns the full set in one page, using the uniform
+envelope.
 
-Query params: none.
+Query params: `limit` / `offset` accepted but the full set is
+returned regardless.
 
-Response: `{ items: Path[] }`. The `Path` schema:
+Response: `Paginated<Path>` (`total === items.length`, `offset: 0`).
+The `Path` schema:
 
 ```ts
 export const Path = z.object({
@@ -269,9 +285,10 @@ omitted-key becomes JSON's explicit `null` at this boundary).
 List probes. Returns hot columns only — the JSON payload field is
 omitted from list results.
 
-Query params (all optional): `target_id`, `path_name`,
-`check_type`, `failed` (boolean), `since`, `until`, `cursor`,
-`limit`.
+Filters (all optional): `target_id`, `path_name`, `check_type`,
+`failed` (boolean), `since`, `until`. Pagination: `limit` /
+`offset`. Ordering is fixed at `started_at desc` (a time-series has
+one sane order); no `sort` param.
 
 Response: `Paginated<ProbeHotColumns>`. Schema:
 
@@ -303,10 +320,16 @@ Response: `ProbeHotColumns` extended with `payload: ProbePayload`
 
 #### `GET /api/v1/signals`
 
-List signals.
+List signals. Backs both the signals sidebar (filtered to
+`status=active`, fed a single full page, then patched live from the
+WebSocket stream) and the signals browse page (full filter / sort /
+page control, snapshot-on-query).
 
-Query params: `target_id`, `rule_name`, `status`
-(`active` / `cleared`), `since`, `until`, `cursor`, `limit`.
+Filters (all optional): `target_id`, `rule_name`, `status`
+(`active` / `cleared`), `min_confidence` (float), `since`, `until`
+(against `fired_at`). Pagination: `limit` / `offset`. Sorting:
+`sort` ∈ `fired_at | last_seen_at | confidence | rule_name`
+(default `fired_at`), `order` ∈ `asc | desc` (default `desc`).
 
 Response: `Paginated<Signal>`. Schema:
 
