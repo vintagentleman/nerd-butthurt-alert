@@ -86,10 +86,15 @@ Leaf and shared components, grouped by view. Components marked
 - `MatrixGrid` — the targets × paths grid. Hand-rolled (bespoke
   layout, performance-sensitive, not expressible as a native
   primitive).
-- `MatrixCell` — one cell = the latest probe for a
-  `(target, path, check_type)` triple. Communicates, at minimum,
-  reached-stage/outcome, latency, and age. *(Exact visual encoding
-  — colour, glyph, number density — provisional.)*
+- `MatrixCell` — one cell per `(target, path)`. Its status is driven by
+  the latest `http_get` probe for that pair, with the `dns_lookup` and
+  `tcp_connect` results folded in as secondary indicators (full
+  per-check detail lives in the drill-in). The matrix is **2D** — check
+  type is folded into the cell, not a third visible axis — which also
+  keeps the grid from blowing out in width (resolving the
+  horizontal-scroll concern). Communicates, at minimum, the derived
+  **cell status** (see "Derived views"), latency, and age. *(Exact
+  visual encoding — colour, glyph, number density — provisional.)*
 - `MatrixAxisHeader` — target row labels / path column headers.
 
 ### Signals
@@ -156,8 +161,28 @@ applies them to stores.
 ### Derived views
 
 - The matrix's cells are **derived** from `targets` × `paths` ×
-  `latestProbes` — no separate matrix store; it's a pure projection,
-  so any store patch reactively updates exactly the affected cells.
+  `latestProbes` (× `activeSignals`, for the blocked / degraded
+  classes) — no separate matrix store; it's a pure projection, so any
+  store patch reactively updates exactly the affected cells. Each
+  cell's **status** is computed from the latest `http_get` probe for
+  its `(target, path)` plus that target's active signals:
+
+  | status | when |
+  |---|---|
+  | `pending` | no `http_get` probe yet for this cell |
+  | `down` | latest `http_get` has a non-null `first_failure_code` (didn't complete) |
+  | `blocked` | completed, but a target-side block is evident: `final_status_code` in {403, 451, …} **or** an active blocking-class signal (`unavailability_phrase_matched`, `geoblock_redirect`) |
+  | `degraded` | completed cleanly but an active degradation signal applies (`latency_anomaly`, a cross-path divergence, or `first_party_resource_stalled` — document fine but the site's own assets are stalled) |
+  | `up` | completed cleanly, no blocking / degradation signal |
+
+  `blocked` and `degraded` deliberately fold in `activeSignals` because
+  the most interesting outcomes — a 200 hiding a geoblock body, a
+  cul-de-sac redirect — carry no `first_failure_code`, so colouring by
+  failure code alone would render them `up`. The `final_status_code`
+  check gives an immediate `blocked` for hard refusals; the
+  signal-backed cases resolve a beat later when the relevant
+  `signal.fired` arrives. The exact palette is provisional (visual
+  layer); this *derivation* is the fixed part.
 - The sidebar is derived from `activeSignals`.
 
 ### What is and isn't live

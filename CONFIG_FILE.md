@@ -204,7 +204,7 @@ how these surface in `body.shape_signals`).
 unavailability_phrases = [
   "unavailable in your region",
   "not available in your country",
-  "451",
+  "unavailable for legal reasons",
   "service unavailable",
   "blocked",
   "Access Denied",
@@ -405,7 +405,7 @@ default_response_headers_captured = [
 unavailability_phrases = [
   "unavailable in your region",
   "not available in your country",
-  "451",
+  "unavailable for legal reasons",
   "service unavailable",
   "blocked",
   "Access Denied",
@@ -462,8 +462,9 @@ confidence      = 0.85
 [rules.unavailability_phrase_matched]
 confidence = 0.75
 
-[rules.js_cul_de_sac]
-confidence = 0.7
+[rules.geoblock_redirect]
+block_indicator_patterns = ["restricted", "unavailable", "geo", "blocked", "region", "denied", "sorry"]
+confidence               = 0.7
 
 [rules.target_unreachable_all_paths]
 window_minutes = 30
@@ -486,6 +487,13 @@ baseline_window_days = 7
 k_stddev             = 3
 min_consecutive      = 3
 confidence           = 0.6
+
+[rules.incomplete_body]
+min_completion_ratio = 0.9
+confidence           = 0.8
+
+[rules.first_party_resource_stalled]
+confidence = 0.8
 ```
 
 ## Worked example: a user's `local.toml`

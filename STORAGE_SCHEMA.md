@@ -15,6 +15,32 @@ probe record preserved as a JSON blob in the `probes.payload` column
 — this lets the payload schema evolve (new check-types, new per-op
 fields) without storage migrations in most cases.
 
+## Connection settings (pragmas)
+
+Set once per connection at open, before any query:
+
+- **`PRAGMA foreign_keys = ON`** — **required.** SQLite defaults foreign
+  keys *off*, and the `ON DELETE CASCADE` on `probes.target_id` /
+  `signals.target_id` is load-bearing (deleting a target must clear its
+  probes and signals). Without this pragma the cascades silently no-op
+  and orphan rows accumulate.
+- **`PRAGMA journal_mode = WAL`** — lets the dashboard's read queries
+  run concurrently with the probe engine's writes instead of serialising
+  on a single writer lock. The natural fit for one continuous writer +
+  bursty readers.
+- **`PRAGMA busy_timeout = 5000`** — a writer waits rather than failing
+  with `SQLITE_BUSY` if the DB is briefly locked.
+- **`PRAGMA synchronous = NORMAL`** — safe under WAL and avoids an fsync
+  per write; for a personal monitor a crash loses at most the last
+  checkpoint, not the DB.
+
+`node:sqlite`'s API is **synchronous** — every statement blocks the
+calling thread, which is the same event-loop thread that serves the
+HTTP and WebSocket surfaces. Fine at this scale, but it makes the
+indexed, paginated read paths below load-bearing: a long unindexed scan
+would stall live probe ingestion and dashboard pushes alike. Genuinely
+heavy analytical queries belong off the hot path.
+
 ## Tables
 
 Three core tables plus one convention sidecar:
@@ -152,7 +178,10 @@ over `data.queries[].failure` first, then
 
 `reached_stage` and `first_failure_code` are always consistent:
 `reached_stage == "complete"` implies `first_failure_code IS NULL`
-and vice versa.
+and vice versa. A `complete` probe may still carry a `termination_mode`
+anomaly (e.g. `tls_close_notify_missing`); that lives only in the
+payload's `termination_mode`, never in `first_failure_code`, so it does
+not break this invariant — see `PROBE_PAYLOAD.md`.
 
 ### `final_status_code` and `impersonation_profile`
 

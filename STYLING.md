@@ -33,6 +33,15 @@ those decisions hang on so they stay consistent and swappable.
   `padding-block`, `inset`, `*-block`/`*-inline`). Correct modern
   default, and it pairs with the `flip-block` / `flip-inline`
   anchor-positioning fallbacks the tooltip uses.
+- **Self-hosted fonts, no runtime CDN.** Any web fonts are bundled and
+  served from the app's own origin — never fetched from a third-party
+  host at runtime. This is doubly true here: a connectivity/censorship
+  monitor must not depend on `fonts.googleapis.com` (or any external
+  host) to render — the very conditions it exists to observe could
+  throttle or block that fetch. Self-hosting also removes a
+  flash-of-unstyled-text source and a third-party request. (The
+  throwaway prototype's Google Fonts `<link>` is a prototype shortcut,
+  not the shipped approach.)
 
 ## Cascade layers
 

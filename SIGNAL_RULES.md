@@ -13,7 +13,7 @@ A companion to `ARCHITECTURE.md`, `PROBE_PAYLOAD.md`, and
 - The **per-rule config namespace** — including enable flags and
   confidence values — which lives in the global configuration file,
   not in code.
-- The **v1 catalogue** of 15 rules across 6 categories.
+- The **v1 catalogue** of 17 rules across 7 categories.
 - A **convention for adding new rules** so the engine is genuinely
   extensible — adding a rule means dropping in a new file.
 
@@ -25,11 +25,14 @@ over time. The contract is designed so that growth is cheap.
 
 A signal rule is a single TypeScript module: one file under
 `src/signals/rules/` exporting a `Rule` object. The engine discovers
-all rules at startup and runs every enabled rule after every probe
-insertion. Each rule returns one of three outcomes — *fire*,
-*clear*, or *no-op* — and the engine translates that into a
-`signals` row insert / update according to the lifecycle described
-in `STORAGE_SCHEMA.md`.
+all rules at startup and runs each enabled rule on the trigger that
+matches its input scope: single-probe and target-window rules run on
+every probe insertion; cross-path rules run once per target at a
+**sweep barrier**, after that target's probes for the tick have settled
+(see "Evaluation triggers" below). Each rule returns one of three
+outcomes — *fire*, *clear*, or *no-op* — and the engine translates that
+into a `signals` row insert / update according to the lifecycle
+described in `STORAGE_SCHEMA.md`.
 
 Rules are **pure-ish async functions** of the new probe plus
 queryable history. All knobs — thresholds, time windows, phrase
@@ -47,6 +50,15 @@ interface Rule {
   /** Unique identifier; matches signals.rule_name in storage. */
   name: string;
 
+  /**
+   * Input scope — also selects the evaluation trigger:
+   *   "single-probe" / "target-window" → run on each probe insertion
+   *   "cross-path"                      → run once per target at the
+   *                                       sweep barrier (see "Evaluation
+   *                                       triggers").
+   */
+  scope: "single-probe" | "target-window" | "cross-path";
+
   /** Default config values used when the config file omits them. */
   defaults: Record<string, unknown>;
 
@@ -55,8 +67,16 @@ interface Rule {
 }
 
 interface RuleInput {
-  /** The probe row just inserted (hot columns + parsed payload). */
-  newProbe: ProbeRecord;
+  /**
+   * The probe row just inserted (hot columns + parsed payload), for
+   * single-probe / target-window rules. `null` for cross-path rules,
+   * which run at the sweep barrier with no single triggering probe —
+   * they read the target's cells via `storage` instead.
+   */
+  newProbe: ProbeRecord | null;
+
+  /** The target under evaluation (always set, both triggers). */
+  targetId: number;
 
   /** Read-only interface over the probes table. */
   storage: StorageReader;
@@ -118,6 +138,37 @@ only fires on `http_get` should return `no-op` for a `dns_lookup`
 probe, **not** `clear` — otherwise any unrelated probe would clear
 the signal. Rules clear only when they affirmatively know the
 condition no longer holds.
+
+## Evaluation triggers
+
+A rule's `scope` selects when the engine runs it:
+
+- **`single-probe` and `target-window`** rules run **on every probe
+  insertion**, immediately, with `newProbe` set to the row just
+  written. They're cheap (a few hot-column checks, at most one or two
+  storage queries) and benefit from firing the instant evidence lands.
+- **`cross-path`** rules run at a **sweep barrier**: once per target,
+  after all of that target's probes for the scheduler tick have
+  settled. They are invoked with `newProbe: null` and read the target's
+  per-path state via `storage.latestPerCell(targetId)`.
+
+### Why cross-path rules can't run per-probe
+
+A cross-path rule asks "what does the latest probe on *every* path show
+for this target?" Within a sweep, a target's probes land one path at a
+time. If such a rule ran on each insertion, the first path's fresh
+probe would be compared against the *previous* tick's results for the
+others — so the rule would fire, then flip, then fire again as each
+remaining path reported, emitting a burst of `signal.*` WebSocket churn
+that only resolves once the last path lands. It would also recompute
+the same cross-path picture once per path (N× the work). The barrier
+evaluates the comparison exactly once, on a consistent snapshot.
+
+The barrier fires per target as soon as that target's tick is complete;
+it does not wait for other targets. A probe that fails or times out
+still counts as "settled" for its cell (the rule sees its
+`first_failure_code`), so a hung path can't stall the barrier beyond
+the probe's own timeout.
 
 ## Lifecycle integration
 
@@ -293,7 +344,7 @@ the engine actually reads `name` from the exported object.
 
 ## The v1 catalogue
 
-Fifteen rules across six categories. Each entry specifies: a
+Seventeen rules across seven categories. Each entry specifies: a
 description, input scope, fires/clears predicates, evidence shape,
 and the rule's `defaults` block (which is also the implicit schema
 of its config-file namespace, minus the always-implicit `enabled`
@@ -385,9 +436,12 @@ DNS resolution returns NXDOMAIN consistently — could be DNS-level
 blocking, or the target genuinely doesn't resolve.
 
 - **Input scope:** target-window
-- **Fires when:** at least `min_consecutive` consecutive
-  `dns_lookup` (or http_get-embedded DNS) results return NXDOMAIN
-  for the target's hostname.
+- **Fires when:** at least `min_consecutive` consecutive `dns_lookup`
+  results return NXDOMAIN for the target's hostname. (Per-path resolver
+  evidence comes only from `dns_lookup`; `http_get` carries no DNS
+  answers — see `PROBE_PAYLOAD.md`. A *direct* `http_get` may
+  corroborate via `first_failure_code == "dns_nxdomain"`, but doesn't
+  substitute for `dns_lookup` on a non-direct path.)
 - **Clears when:** the latest DNS resolution succeeds.
 - **Evidence:** `{ probe_ids, hostname }`
 - **Defaults:**
@@ -402,11 +456,13 @@ DNS returns private or loopback IPs for a public target hostname —
 classic DNS hijacking or captive portal signature.
 
 - **Input scope:** single-probe
-- **Fires when:** any answer in the new probe's DNS data falls into
-  RFC1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
-  or loopback (`127.0.0.0/8`), AND the target hostname is not in
-  `private_resolution_expected_hostnames` (whitelist of intranet
-  hostnames that legitimately resolve to private space).
+- **Fires when:** the new probe is a `dns_lookup` (the only check that
+  carries resolver answers — `http_get` exposes none, per
+  `PROBE_PAYLOAD.md`; no-op on other check types) and any answer in its
+  data falls into RFC1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`) or loopback (`127.0.0.0/8`), AND the target hostname
+  is not in `private_resolution_expected_hostnames` (whitelist of
+  intranet hostnames that legitimately resolve to private space).
 - **Clears when:** the latest DNS answers fall in public IP space.
 - **Evidence:** `{ probe_ids: [newProbe.id], hostname, returned_ip, range }`
 - **Defaults:**
@@ -457,7 +513,8 @@ target-side outage rather than network-path issue.
 #### `unavailability_phrase_matched`
 
 Response body contains known unavailability phrases ("unavailable
-in your region," "451," "service unavailable," etc.).
+in your region," "unavailable for legal reasons," "service
+unavailable," etc.).
 
 - **Input scope:** single-probe
 - **Fires when:** the new probe's payload has any non-empty
@@ -472,24 +529,38 @@ in your region," "451," "service unavailable," etc.).
   (The phrase list itself lives in the probe-engine's body-shape
   detection config, not in this rule's config.)
 
-#### `js_cul_de_sac`
+#### `geoblock_redirect`
 
-The target serves a JS redirect to an unavailability notice — HTTP
-200 OK but the content is a redirect-to-error pattern.
+The target bounces the request to an unavailability / restriction
+dead-end instead of serving the content. Covers all three transports
+the bounce can take — an HTTP 3xx, a `<meta refresh>`, or a JS
+`window.location` redirect; the mechanism is incidental and recorded in
+evidence (this generalises the former `js_cul_de_sac`, which was the JS
+transport only).
 
 - **Input scope:** single-probe
-- **Fires when:** the new probe's `body.shape_signals.has_js_redirect`
-  is true AND either:
-  - `js_redirect_target` points to a domain different from the
-    original target's domain, OR
-  - `body.shape_signals.is_empty_or_minimal_html` is also true.
-- **Clears when:** the latest http_get probe shows `has_js_redirect:
-  false` and a meaningful body.
-- **Evidence:** `{ probe_ids: [newProbe.id], js_redirect_target,
-  final_url, path_name }`
+- **Fires when:** `newProbe.check_type == "http_get"` and the request
+  was redirected to a different final URL by **any** mechanism — an HTTP
+  3xx hop in `rollup.redirect_chain`, `body.shape_signals.has_meta_refresh`,
+  or `body.shape_signals.has_js_redirect` — **and** the destination
+  signals unavailability via any of:
+  - the final URL's path/host matches a `block_indicator_patterns`
+    entry (catches e.g. a `302 → /restricted`),
+  - `body.shape_signals.unavailability_phrases_matched` is non-empty,
+  - the landing is `is_empty_or_minimal_html` on a *different*
+    registrable domain (the former `js_cul_de_sac` gate).
+
+  The unavailability gate is what keeps benign canonical redirects
+  (http→https, `www`, locale, auth) from firing.
+- **Clears when:** the latest http_get reaches the requested URL with
+  no dead-end redirect and a meaningful body.
+- **Evidence:** `{ probe_ids: [newProbe.id], redirect_mechanism,
+  requested_url, final_url, matched, path_name }` — `redirect_mechanism`
+  ∈ `http_3xx | meta_refresh | js`.
 - **Defaults:**
   ```toml
-  confidence = 0.7
+  block_indicator_patterns = ["restricted", "unavailable", "geo", "blocked", "region", "denied", "sorry"]
+  confidence               = 0.7
   ```
 
 ### Reachability
@@ -530,18 +601,93 @@ issue.
   confidence = 0.85
   ```
 
+### Stream interference
+
+#### `incomplete_body`
+
+The response starts normally — TLS, request, and `200`-class headers
+all succeed — but the body never finishes: throughput drops to ~zero
+after an initial chunk and the transfer hits the probe's timeout with no
+close. A stealthy DPI / throttling signature ("make it look broken, not
+blocked"), distinct from a clean target-side close.
+
+- **Input scope:** single-probe
+- **Fires when:** `newProbe.check_type == "http_get"` and
+  `reached_stage == "body_transfer"` — headers arrived but the transfer
+  never reached `complete`, so `first_failure_code` is `http_body_stalled`
+  or `http_body_truncated`. When `content_length_header` is known, also
+  require `encoded_bytes_received / content_length_header <
+  min_completion_ratio` (suppresses near-complete truncations; use the
+  **wire**/encoded byte count, since content-encoding makes the decoded
+  body exceed `content_length` and would otherwise read >100% and mask a
+  stall). When it's absent (chunked), `reached_stage == "body_transfer"`
+  alone is sufficient — the idle-stall / truncation already establishes
+  incompleteness. Covers the stall (`termination_mode "timeout"`) and
+  truncating-close (`"rst"` / `"clean_fin"`) variants alike.
+- **Clears when:** a later http_get on the same path completes the body
+  (`reached_stage == "complete"`).
+- **Evidence:** `{ probe_ids, bytes_received, content_length,
+  completion_ratio, termination_mode, final_status_code, path_name }`
+- **Defaults:**
+  ```toml
+  min_completion_ratio = 0.9
+  confidence           = 0.8
+  ```
+
+**Attribution by composition.** Because a stalled or truncated probe
+now carries a non-null `first_failure_code` (`http_body_stalled` or
+`http_body_truncated`, per `PROBE_PAYLOAD.md`), it counts as "failing"
+to the cross-path rules — so `path_specific_failure` already fires when
+the body completes on some paths but stalls on others, giving
+DPI-vs-target attribution without a new cross-path rule. `incomplete_body`
+characterises the *stage*; `path_specific_failure` attributes it.
+
+#### `first_party_resource_stalled`
+
+The target document loads, but one or more of the site's **own**
+(first-party, eTLD+1) subresources are stalled or truncated — the same
+interference applied to a critical asset instead of the document. Catches
+the small-shell case `incomplete_body` misses: a tiny HTML page completes
+(under the body-stall cutoff) while the site's larger `app.js` / CSS
+bundle is DPI-stalled over it, leaving the page broken.
+
+- **Input scope:** single-probe
+- **Fires when:** `newProbe.check_type == "http_get"` and the payload's
+  `subresources` summary (first-party only) reports `stalled > 0` or
+  `failed > 0` — i.e. some first-party asset has a non-null
+  `first_failure_code` (`http_body_stalled` / `http_body_truncated` / a
+  connection-stage failure). Independent of the document's own
+  `reached_stage`; third-party subresources are excluded by construction
+  (see `PROBE_PAYLOAD.md`).
+- **Clears when:** the latest http_get shows all first-party subresources
+  `complete`.
+- **Evidence:** `{ probe_ids, stalled_resources, worst_first_failure_code,
+  path_name }`
+- **Defaults:**
+  ```toml
+  confidence = 0.8
+  ```
+
+Composes with cell status: when this fires, the matrix cell renders
+`degraded` / `down` rather than a deceptive `up` — the document was
+fine, but the site is broken.
+
 ### Cross-path comparison
 
 #### `dns_answers_diverge`
 
 DNS resolution returns disjoint IP sets across paths for the same
 target — suggests DNS-based interference, geographic CDN routing
-differences, or DNS hijacking.
+differences, or DNS hijacking. Requires each compared path to run a
+`dns_lookup` with a resolver tunnelled through that path (DoT/DoH over
+its SOCKS5 — see `PROBE_PAYLOAD.md`); `http_get` carries no answers, so
+a path without a `dns_lookup` simply doesn't participate in the
+comparison.
 
 - **Input scope:** cross-path
-- **Fires when:** within `window_minutes`, the union of A/AAAA
-  answers from two or more paths has zero intersection (no IP appears
-  in both sets), modulo IPv4/IPv6 family separation.
+- **Fires when:** within `window_minutes`, the `dns_lookup` answer sets
+  (A/AAAA) of two or more paths have zero pairwise intersection (no IP
+  appears in both sets), modulo IPv4/IPv6 family separation.
 - **Clears when:** the most recent answer sets share at least one
   IP.
 - **Evidence:** `{ answers_by_path: { path_name: [ip,...] }, divergence_kind }`
@@ -600,8 +746,8 @@ The convention is designed to make this a single-file change.
 
 1. **Create `src/signals/rules/<name>.ts`.** The filename should
    match the rule's `name` field for sanity.
-2. **Default-export a `Rule` object.** Provide `name`, `defaults`,
-   and an async `run` function.
+2. **Default-export a `Rule` object.** Provide `name`, `scope`,
+   `defaults`, and an async `run` function.
 3. **Short-circuit cheaply on irrelevant probes.** Most rules return
    `no-op` immediately when `newProbe.check_type` doesn't match what
    they care about.
@@ -624,6 +770,7 @@ import type { Rule } from "../types";
 
 const rule: Rule = {
   name: "redirect_to_known_block_page",
+  scope: "single-probe",
 
   defaults: {
     /** Hostnames known to host ISP-level block pages. */
@@ -632,6 +779,9 @@ const rule: Rule = {
   },
 
   async run({ newProbe, config }) {
+    // Single-probe rules always get a newProbe; the guard also
+    // satisfies the `ProbeRecord | null` type.
+    if (!newProbe) return { action: "no-op" };
     // Short-circuit: only http_get is relevant.
     if (newProbe.check_type !== "http_get") {
       return { action: "no-op" };

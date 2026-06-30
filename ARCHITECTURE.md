@@ -106,8 +106,13 @@ flowchart LR
    stage, first failure code, …) plus the full payload as a JSON
    blob. See `STORAGE_SCHEMA.md` for the column-level detail and
    `PROBE_PAYLOAD.md` for the payload structure.
-4. The **signals engine** evaluates the new probe — along with recent
-   history for that target — against its rule set, persisting any
+4. The **signals engine** evaluates rules in two phases. Single-probe
+   and target-window rules run immediately on the new probe (with
+   recent history for that target). Cross-path rules — which compare the
+   latest result across *all* of a target's paths — are deferred to a
+   **sweep barrier**: they run once per target after that target's
+   probes for the tick have all settled, so they never compare this
+   tick's path against last tick's others. Both phases persist any
    fresh signals.
 5. The **WebSocket layer** pushes delta events to connected
    dashboard clients: one message per probe insertion, one per
@@ -162,7 +167,10 @@ v1; they live in the config file and are re-read on restart.
 
 **Signals engine.** A set of pure-ish async functions, each
 evaluating some slice of probe data and returning 0..n signals
-(fire / clear / no-op). Runs after each probe. Rules are plain
+(fire / clear / no-op). Runs in two phases: single-probe and
+target-window rules fire per probe insertion; cross-path rules run
+once per target at a sweep barrier, after the tick's probes settle
+(see `SIGNAL_RULES.md`). Rules are plain
 TypeScript modules under `src/signals/rules/`; adding a rule means
 adding a file — auto-discovered at startup, no central registry.
 All thresholds and confidence values live in the config file, not
@@ -193,8 +201,10 @@ network).
 
 ## Technology choices
 
-**Node.js 26 runtime.** Built-in `node:sqlite` (stable since Node
-24, no `better-sqlite3` bundling pain), stable Temporal API for
+**Node.js 26 runtime.** Built-in `node:sqlite` (a release candidate —
+Stability 1.2 — as of Node 24–26: no flag required, though it still
+emits an `ExperimentalWarning` and the API isn't frozen; no
+`better-sqlite3` bundling pain), the stable Temporal API for
 datetime handling, native WHATWG `fetch`, built-in test runner, and
 the broader ecosystem maturity that comes with Node. TypeScript
 throughout (via `--experimental-strip-types`, `tsx`, or pre-compile
@@ -211,9 +221,13 @@ component framework sooner rather than later, and SvelteKit's form
 actions cover the management surface cleanly without bespoke glue.
 `adapter-node` for production builds.
 
-**`node:sqlite`.** Built-in to Node since v22 (stable in v24+),
-single-file DB, zero deployment friction, more than fast enough for
-the probe throughput at hand.
+**`node:sqlite`.** Built-in to Node since v22.5; a release candidate
+(Stability 1.2) through v24–v26 — usable without a flag but still
+emitting an `ExperimentalWarning` and not yet API-frozen. Single-file
+DB, zero deployment friction, more than fast enough for the probe
+throughput at hand. Connection settings (WAL, `foreign_keys`,
+`busy_timeout`) and the synchronous-API implication are pinned in
+`STORAGE_SCHEMA.md`.
 
 **Native platform primitives — no component library.** Every
 interactive primitive (`<dialog>`, `<details>`, native form
@@ -282,10 +296,11 @@ iteration. Each becomes its own file.
 - **Signal rule catalogue** (`SIGNAL_RULES.md`). The `Rule`
   contract (pure-ish async function, three-outcome model), the
   storage reader API rules use to query history, the v1 catalogue
-  of 15 rules across 6 categories (TLS / DNS interference, target-
-  initiated unavailability, reachability, cross-path comparison,
-  perf), and an "adding your own rule" appendix with a worked
-  example. Rules auto-discovered from `src/signals/rules/`. All
+  of 17 rules across 7 categories (TLS / DNS interference, target-
+  initiated unavailability, reachability, stream interference,
+  cross-path comparison, perf), and an "adding your own rule" appendix
+  with a worked example. Rules auto-discovered from `src/signals/rules/`.
+  All
   thresholds and confidence values are config (under
   `rules.<rule_name>.*`), not code constants.
 - **Configuration file format** (`CONFIG_FILE.md`). TOML, layered

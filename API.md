@@ -364,7 +364,9 @@ Response:
 export const DashboardSnapshot = z.object({
   targets: z.array(Target),
   paths: z.array(Path),
-  latest_probes: z.array(ProbeHotColumns),  // one per (target, path, check_type) cell
+  latest_probes: z.array(ProbeHotColumns),  // latest per (target, path, check_type);
+                                            // the matrix folds these into one cell
+                                            // per (target, path)
   active_signals: z.array(Signal),
 });
 ```
@@ -595,9 +597,11 @@ perspective.
    the matrix page fetches the snapshot (`GET /api/v1/dashboard/snapshot`
    or its direct equivalent). Response includes targets, paths,
    latest probe per cell, active signals.
-2. **Page renders.** Matrix cells display the latest probe per
-   `(target, path, check_type)`, colored by `first_failure_code`
-   presence. A sidebar lists active signals.
+2. **Page renders.** The matrix renders one cell per `(target, path)`,
+   driven by that cell's latest `http_get` probe and coloured by a
+   derived **cell status** (not raw `first_failure_code` — see
+   `DASHBOARD.md`), with the `dns_lookup` / `tcp_connect` results shown
+   as secondary indicators. A sidebar lists active signals.
 3. **Client opens WebSocket.** Root layout instantiates
    `new WebSocket("ws://localhost:5173/api/v1/events")`. On
    `onopen` the dashboard re-fetches the snapshot (the same
@@ -607,9 +611,9 @@ perspective.
    probes every enabled `(target, path, check_type)` triple. As
    each probe completes and is inserted, the server pushes a
    `probe.inserted` WS message.
-5. **Client updates.** The matrix cell for the affected
-   `(target, path, check_type)` re-renders with the new probe's
-   `reached_stage` / `first_failure_code` / `runtime_ms`.
+5. **Client updates.** The `(target, path)` cell affected by the new
+   probe re-renders — its derived status recomputed from the latest
+   probe per check type for that cell.
 6. **Signal rules evaluate.** Several rules fire on the new probes;
    one fires for the first time (`signal.fired`), another
    already-active one updates (`signal.updated`), a third no
