@@ -111,7 +111,7 @@ CREATE TABLE probes (
 );
 
 CREATE INDEX idx_probes_target_path_time
-  ON probes (target_name, path_name, started_at DESC);
+  ON probes (target_name, path_name, check_type, started_at DESC);
 
 CREATE INDEX idx_probes_time
   ON probes (started_at DESC);
@@ -126,8 +126,8 @@ CREATE INDEX idx_probes_failure
 Every hot column is a duplicate of something present in the payload.
 The duplication buys query speed:
 
-- "Latest probe per `(target_name, path_name)`" — the metrics
-  exporter's gauge seed and Grafana's status matrix — uses
+- "Latest probe per `(target_name, path_name, check_type)`" — the
+  metrics exporter's gauge seed and Grafana's status matrix — uses
   `idx_probes_target_path_time` without touching JSON.
 - Signal-rule windows over recent probes use `idx_probes_time`
   without JSON.

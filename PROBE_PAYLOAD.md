@@ -135,7 +135,7 @@ rollup for quick queries.
                                       // body_transfer | complete
   "termination_mode": "clean_fin",   // clean_fin | rst | timeout |
                                       // tls_close_notify_missing |
-                                      // connection_reset | body_incomplete
+                                      // body_incomplete
   "hops": [ /* per-hop records; see below */ ],
   "network_events": [ /* optional low-level events; see below */ ],
   "rollup": { /* precomputed summaries; see below */ },
@@ -166,7 +166,8 @@ string, per the mapping in the error taxonomy below.
   "timeout_ms": 10000,
   "body_snippet_cap_bytes": 32768,
   "response_headers_captured": ["content-type", "content-length", "location",
-                                 "server", "strict-transport-security"],
+                                 "server", "strict-transport-security",
+                                 "set-cookie"],
   "pinned_http_version": null               // null | "1.1" | "2" | "3"
 }
 ```
@@ -261,7 +262,7 @@ an answer set, and through a path the `dns` and `tcp` blocks are largely
           "location": null,
           "server": "...",
           "strict-transport-security": "max-age=31536000",
-          "set-cookie-names": ["session_id", "csrf_token"]    // names-only
+          "set-cookie-names": ["session_id", "csrf_token"]    // set-cookie captured names-only; values redacted
         },
         "all_headers": {
           // overflow dict: full response headers for future LLM-assisted
@@ -361,10 +362,11 @@ If the probe waited on `load`, it would report a stall on virtually
 every ad-supported site whose trackers are slow or blocked — a flood of
 false positives unrelated to the target's reachability.
 
-So `reached_stage` / `first_failure_code` track the **main document
-request** only — keyed on its `Network.loadingFinished` (with the body
-idle-timeout that defines `http_body_stalled`), never the page `load`
-event. But "is the target working" is more than the document, so the
+So `reached_stage` (and the per-op `failure` records from which
+`STORAGE_SCHEMA.md` derives `first_failure_code`) track the **main
+document request** only — keyed on its `Network.loadingFinished` (with
+the body idle-timeout that defines `http_body_stalled`), never the page
+`load` event. But "is the target working" is more than the document, so the
 engine *also* tracks the target's **first-party** subresources (same
 registrable domain — eTLD+1) and records their health in `subresources`
 (below). **Third-party** subresources — ad / tracking / RTB /
@@ -755,9 +757,9 @@ The following are acknowledged but belong in other sub-documents or
 later iterations:
 
 - **Storage layout** (JSON-blob column vs. column extraction,
-  indexing, retention, rollups) is the storage-schema sub-document.
+  indexing, retention, rollups) is `STORAGE_SCHEMA.md`.
 - **Signal rule catalogue** — which predicates signal rules compose
-  over these fields — is the signal-rule-catalogue sub-document. See
+  over these fields — is `SIGNAL_RULES.md`. See
   `memory/project_open_questions.md` for the outcome-semantics /
   signal-predicate discussion that anchors it.
 - **Browser-context pooling, crash recovery, resource budgets** —
@@ -765,10 +767,10 @@ later iterations:
 - **Body-snippet cap default.** Proposed at 32 KB; exact value may be
   revisited once we see real body sizes for the target set.
 - **Which config fields accept per-target overrides** — belongs in
-  the configuration-file-format sub-document. Assumption here: most
-  `config.*` fields are overridable.
+  `CONFIG_FILE.md`. Assumption here: most `config.*` fields are
+  overridable.
 - **Cross-probe signals** (comparisons across paths, across time,
-  across impersonation profiles) — signal-rule-catalogue.
+  across impersonation profiles) — `SIGNAL_RULES.md`.
 - **Full OONI failure-string cross-reference table.** Not in v0; to
   be produced alongside probe engine implementation.
 - **Alternative `http_get` backends.** Playwright is the v0

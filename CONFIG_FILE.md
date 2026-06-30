@@ -189,6 +189,7 @@ default_pinned_http_version         = ""    # "" | "1.1" | "2" | "3"
 default_response_headers_captured   = [
   "content-type", "content-length", "location",
   "server", "strict-transport-security",
+  "set-cookie",   # captured names-only as `set-cookie-names`; values redacted
 ]
 ```
 
@@ -428,7 +429,7 @@ dns_lookup_cadence_seconds  = 300   # 5 min
 tcp_connect_cadence_seconds = 300   # 5 min
 
 # ───────────────────────────────────────────────────────────────
-# Probe defaults (per-target overrides in DB beat these)
+# Probe defaults ([[targets]].probe_overrides beat these)
 # ───────────────────────────────────────────────────────────────
 [probes]
 default_timeout_ms                = 10000
@@ -440,6 +441,7 @@ default_pinned_http_version       = ""     # "" | "1.1" | "2" | "3"
 default_response_headers_captured = [
   "content-type", "content-length", "location",
   "server", "strict-transport-security",
+  "set-cookie",   # captured names-only as `set-cookie-names`; values redacted
 ]
 
 [probes.shape_detection]

@@ -13,7 +13,7 @@ A companion to `ARCHITECTURE.md`, `PROBE_PAYLOAD.md`, and
 - The **per-rule config namespace** — including enable flags and
   confidence values — which lives in the global configuration file,
   not in code.
-- The **v1 catalogue** of 17 rules across 7 categories.
+- The **v0 catalogue** of 17 rules across 7 categories.
 - A **convention for adding new rules** so the engine is genuinely
   extensible — adding a rule means dropping in a new file.
 
@@ -76,7 +76,7 @@ interface RuleInput {
   newProbe: ProbeRecord | null;
 
   /** The target under evaluation (always set, both triggers). */
-  targetId: number;
+  targetName: string;
 
   /** Read-only interface over the probes table. */
   storage: StorageReader;
@@ -150,7 +150,7 @@ A rule's `scope` selects when the engine runs it:
 - **`cross-path`** rules run at a **sweep barrier**: once per target,
   after all of that target's probes for the scheduler tick have
   settled. They are invoked with `newProbe: null` and read the target's
-  per-path state via `storage.latestPerCell(targetId)`.
+  per-path state via `storage.latestPerCell(targetName)`.
 
 ### Why cross-path rules can't run per-probe
 
@@ -198,7 +198,7 @@ interface StorageReader {
    * ones you actually need to inspect.
    */
   recentProbes(opts: {
-    targetId: number;
+    targetName: string;
     pathName?: string;
     checkType?: "http_get" | "dns_lookup" | "tcp_connect";
     sinceMs?: number;       // probes started_at >= now - sinceMs
@@ -209,7 +209,7 @@ interface StorageReader {
    * The latest probe for each (path_name, check_type) tuple for
    * this target. Useful for cross-path comparison rules.
    */
-  latestPerCell(targetId: number): Promise<ProbeRecordHotColumns[]>;
+  latestPerCell(targetName: string): Promise<ProbeRecordHotColumns[]>;
 
   /**
    * Parse and return the JSON payload for one probe.
@@ -225,8 +225,8 @@ parsing of historical rows.
 These three methods cover the three input-scope categories rules use:
 
 - **Single-probe rules** read only `newProbe`; no storage calls.
-- **Target-window rules** call `recentProbes({ targetId, sinceMs })`.
-- **Cross-path rules** call `latestPerCell(targetId)`.
+- **Target-window rules** call `recentProbes({ targetName, sinceMs })`.
+- **Cross-path rules** call `latestPerCell(targetName)`.
 
 If a rule needs richer querying than these three methods provide,
 that's a sign the rule itself is unusual; raise it as a deferred
@@ -318,7 +318,7 @@ If the config file omits a rule entirely, its `defaults` apply in
 full and the rule is enabled. If a rule introduces a new config key
 in code, the config schema doesn't need pre-updating — the
 `defaults` provide the implicit schema. Reload semantics for the
-config file are in the configuration-file-format sub-document.
+config file are in `CONFIG_FILE.md`.
 
 ## Rule module convention
 
@@ -343,7 +343,7 @@ existing active signals for the removed rule remain in the database
 The file name should match the rule's `name` field for sanity, but
 the engine actually reads `name` from the exported object.
 
-## The v1 catalogue
+## The v0 catalogue
 
 Seventeen rules across seven categories. Each entry specifies: a
 description, input scope, fires/clears predicates, evidence shape,
@@ -836,7 +836,7 @@ confidence = 0.85   # tweak down; I think this signal is slightly
 ```
 
 That's all. Restart the engine (or wait for hot-reload, depending on
-how the config sub-doc settles reload semantics), and the rule is
+how `CONFIG_FILE.md` settles reload semantics), and the rule is
 live.
 
 ### Patterns worth reusing
@@ -872,7 +872,7 @@ live.
   rules as orthogonal.
 - **Runtime rule enable/disable** without restart — currently the
   `enabled` config flag is read at startup. Hot-reload would require
-  the config sub-doc to expose a reload trigger and the engine to
+  `CONFIG_FILE.md` to expose a reload trigger and the engine to
   re-evaluate the enable set per probe.
 - **Backtesting.** Replaying historical probes against a new rule
   to see how many signals it would have produced retroactively.

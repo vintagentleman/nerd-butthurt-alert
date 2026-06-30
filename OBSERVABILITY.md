@@ -151,8 +151,10 @@ and small for a personal tool (tens, not thousands of series). Hold
 the line:
 
 - **Allowed labels, full stop:** `target`, `path`, `check_type`,
-  `rule`, `outcome`, `stage`, `code`. All are low-cardinality, bounded
-  by config or by fixed enums.
+  `rule`, `outcome`, `code`. All are low-cardinality, bounded by config
+  or by fixed enums. (Probe stage is **not** a label — it is carried as
+  the gauge *value* of `nba_probe_reached_stage` via the ordinal
+  mapping above.)
 - **Never a label:** probe id, signal id, timestamps, full URLs, body
   snippets, latency values, IP addresses, free-form evidence. Those
   are evidence — they live in SQLite, queried by Grafana's SQLite
@@ -177,7 +179,7 @@ fresh Grafana comes up wired with zero clicks.
 
 ### Dashboard inventory
 
-Committed as JSON under `grafana/provisioning/dashboards/`:
+Committed as JSON under `grafana/dashboards/`:
 
 1. **Status matrix** — the signature view. Target rows × path columns,
    each cell coloured by the current `nba_probe_up` /

@@ -197,9 +197,10 @@ framework) serving Prometheus text-format metrics at `/metrics`,
 built on `prom-client`. It derives a bounded set of gauges and
 counters — probe up/down, last latency and a latency histogram,
 reached-stage, probe/error counts, active-signal state and confidence
-— from the latest rows in SQLite at scrape time. Strict label
-cardinality discipline (target, path, check_type, rule, outcome,
-stage, code only — never probe ids, URLs, or timestamps as labels).
+— from the latest persisted state (seeded at startup, updated
+in-process; not re-queried per scrape). Strict label-cardinality
+discipline (target, path, check_type, rule, outcome, code only —
+never probe ids, URLs, or timestamps as labels).
 Full contract and metric inventory in `OBSERVABILITY.md`.
 
 **Visualization — Grafana (external).** Grafana is the entire UI. It
@@ -312,7 +313,7 @@ iteration. Each is its own file.
   TEXT ISO 8601 datetimes.
 - **Signal rule catalogue** (`SIGNAL_RULES.md`). The `Rule`
   contract (pure-ish async function, three-outcome model), the
-  storage reader API rules use to query history, the v1 catalogue
+  storage reader API rules use to query history, the v0 catalogue
   of rules across several categories (TLS / DNS interference, target-
   initiated unavailability, reachability, cross-path comparison,
   perf), and an "adding your own rule" appendix with a worked

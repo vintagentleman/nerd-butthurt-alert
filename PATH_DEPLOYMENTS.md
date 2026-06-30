@@ -615,8 +615,8 @@ something exotic), the generic pattern is:
    SOCKS5 port in `compose.yaml`.
 6. **Pick a secrets pattern** (A, B, or C) appropriate to the
    credential needs.
-7. **Add a path entry** in the main config (illustrative shape,
-   exact format pending the Configuration sub-document):
+7. **Add a path entry** in the main config (illustrative shape; the
+   canonical `[[paths]]` format is in `CONFIG_FILE.md`):
 
    ```
    name        = "my-custom-path"
