@@ -17,9 +17,10 @@ A companion to the other sub-documents. It specifies:
 - **Reload semantics** (v0: none — restart to apply).
 
 The config-file surface is large because the app has a lot of
-tunable knobs (probe defaults, body-shape phrase lists, fifteen
-signal rules, paths). The layering scheme exists precisely so the
-user only has to write what they want to change.
+tunable knobs (probe defaults, body-shape phrase lists, the
+signal-rule catalogue, paths, and targets). The layering scheme
+exists precisely so the user only has to write what they want to
+change.
 
 ## Overview
 
@@ -27,14 +28,13 @@ user only has to write what they want to change.
   than YAML for our use case.
 - **Layered loading:** files merged in a fixed order (see below) so
   committed baselines and user-local overrides cleanly coexist.
-- **What lives here:** application defaults, server / storage /
-  scheduler settings, the **list of paths**, per-rule config, body-
-  shape phrase lists, anything else that's static and operator-
-  authored.
-- **What lives in the DB instead:** targets (user-managed via
-  dashboard, per `STORAGE_SCHEMA.md`), per-target overrides on
-  probe config (`probe_config_overrides` JSON on `targets`),
-  probe records and signals.
+- **What lives here:** application defaults, metrics-exporter /
+  storage / scheduler settings, the **list of paths**, the **list of
+  targets** (including any per-target probe overrides), per-rule
+  config, body-shape phrase lists, anything else that's static and
+  operator-authored.
+- **What lives in the DB instead:** only probe records and signals
+  (per `STORAGE_SCHEMA.md`). Targets and paths are config, not DB.
 - **What lives nowhere committed:** secrets. Path-side credentials
   (VPN passwords, TOTP seeds, Hysteria auth, …) are pulled from env
   vars / `pass` (or `secret-tool`) / Docker secrets, per the patterns in
@@ -108,9 +108,9 @@ state.
 
 Validation sources:
 
-- **Application sections** (`[server]`, `[storage]`, `[scheduler]`,
-  `[probes]`, `[[paths]]`): schema lives in app code; the version
-  in `default.toml` is the documentation-by-example.
+- **Application sections** (`[metrics]`, `[storage]`, `[scheduler]`,
+  `[probes]`, `[[paths]]`, `[[targets]]`): schema lives in app code;
+  the version in `default.toml` is the documentation-by-example.
 - **Rule sections** (`[rules.<rule_name>]`): each rule's `defaults`
   block (per `SIGNAL_RULES.md`) is the implicit schema for its
   namespace. Keys not in `defaults` are accepted silently — useful
@@ -126,14 +126,16 @@ The sections below describe every section the app reads. Examples
 are illustrative TOML fragments; the full annotated `default.toml`
 appears at the end of the doc.
 
-### `[server]`
+### `[metrics]`
 
-SvelteKit / HTTP server settings.
+The Prometheus metrics-exporter HTTP listener — the app's only HTTP
+surface (see `OBSERVABILITY.md`).
 
 ```toml
-[server]
-host = "127.0.0.1"          # bind interface
-port = 5173                 # listen port
+[metrics]
+host      = "127.0.0.1"     # bind interface
+port      = 9974            # listen port for /metrics
+path      = "/metrics"      # scrape path
 log_level = "info"          # trace | debug | info | warn | error
 ```
 
@@ -154,8 +156,9 @@ implementation.
 
 ### `[scheduler]`
 
-Default probe cadences, per check type. Per-target overrides live
-in `targets.cadence_override_seconds` (DB) and trump these.
+Default probe cadences, per check type. Per-target overrides live on
+the target's config entry (`[[targets]].cadence_override_seconds`)
+and trump these.
 
 ```toml
 [scheduler]
@@ -171,10 +174,9 @@ reflect that.
 
 ### `[probes]`
 
-Defaults applied per `http_get` probe. Per-target overrides live in
-`targets.probe_config_overrides` (DB JSON) per `STORAGE_SCHEMA.md`,
-and trump these. Schema mirrors `data.config.*` from
-`PROBE_PAYLOAD.md`.
+Defaults applied per `http_get` probe. Per-target overrides live on
+the target's config entry (`[[targets]].probe_overrides`) and trump
+these. Schema mirrors `data.config.*` from `PROBE_PAYLOAD.md`.
 
 ```toml
 [probes]
@@ -265,6 +267,44 @@ than `default.toml`. `default.toml` ships with no path entries and
 relies on `local.toml` to supply them; absent any path entries the
 app warns at startup.
 
+### `[[targets]]` — the target list
+
+Array of tables. Each entry defines one monitoring target. Targets
+moved here from the database in the 2026-06 pivot (no UI → no runtime
+CRUD); they are declarative and applied at startup, exactly like
+paths.
+
+```toml
+[[targets]]
+name        = "rutracker"               # unique; becomes target_name in storage + the `target` metric label
+url         = "https://rutracker.org/"  # protocol + host + path
+label       = "RuTracker"               # human-readable
+enabled     = true                      # optional; default true
+check_types = ["http_get"]              # optional; subset of http_get | dns_lookup | tcp_connect
+cadence_override_seconds = 600          # optional; omit = use [scheduler] defaults
+
+# Optional per-target probe overrides, merged over [probes] defaults.
+# Attaches to the [[targets]] entry immediately above.
+[targets.probe_overrides]
+timeout_ms            = 30000
+impersonation_profile = "firefox-latest"
+```
+
+Validation rules:
+
+- `name` must be unique within the merged target list; it is the
+  identity used everywhere downstream (the `target_name` columns in
+  `STORAGE_SCHEMA.md`, the `target` label in `OBSERVABILITY.md`).
+  Renaming a target orphans its historical rows (they keep the old
+  name), so treat a rename as delete + add.
+- `url` must be a valid absolute URL. Required.
+- `check_types` defaults to `["http_get"]` when omitted.
+- `[targets.probe_overrides]` accepts any `[probes]` key; merged over
+  the global defaults at dispatch time.
+- Like paths, the canonical `[[targets]]` list typically lives in
+  `local.toml`; `default.toml` ships none and the app warns at startup
+  if the merged list is empty.
+
 ### `[rules.<rule_name>]` — per-rule config
 
 One sub-section per signal rule, following `SIGNAL_RULES.md`. Each
@@ -310,10 +350,10 @@ passwords, TOTP seeds, Hysteria auth, etc.) follow the patterns in
   `/run/secrets/<name>` inside the container.
 
 The application config knows about path *names* and SOCKS5 URLs;
-it does not see the credentials the proxies use. Future
-configuration knobs that would otherwise be sensitive (LLM API
-keys, webhook tokens) similarly pull from env vars at runtime, not
-from config files.
+it does not see the credentials the proxies use. Any future
+configuration knob that would otherwise be sensitive (e.g. an LLM API
+key, if that later-phase feature lands) similarly pulls from env vars
+at runtime, not from config files.
 
 ## Reload semantics
 
@@ -364,11 +404,12 @@ real one may evolve over time.
 # settings here — use config/local.toml (gitignored) for those.
 
 # ───────────────────────────────────────────────────────────────
-# Server
+# Metrics exporter (the app's only HTTP surface — see OBSERVABILITY.md)
 # ───────────────────────────────────────────────────────────────
-[server]
+[metrics]
 host      = "127.0.0.1"
-port      = 5173
+port      = 9974
+path      = "/metrics"
 log_level = "info"     # trace | debug | info | warn | error
 
 # ───────────────────────────────────────────────────────────────
@@ -419,6 +460,15 @@ unavailability_phrases = [
 # role        = "direct"
 # tags        = []
 # description = "Host's default routing"
+
+# ───────────────────────────────────────────────────────────────
+# Targets — define in local.toml; the app warns if this list is empty
+# ───────────────────────────────────────────────────────────────
+# [[targets]]
+# name        = "example"
+# url         = "https://example.com/"
+# label       = "Example"
+# check_types = ["http_get"]
 
 # ───────────────────────────────────────────────────────────────
 # Signal rules — see SIGNAL_RULES.md for the catalogue
@@ -503,8 +553,8 @@ What a real personal-use override file might look like.
 ```toml
 # config/local.toml — machine-specific. NOT committed.
 
-[server]
-port = 8080            # I already use 5173 for something else
+[metrics]
+port = 9975            # 9974 already taken on this host
 
 # ───────────────────────────────────────────────────────────────
 # Paths — the canonical list lives here, not in default.toml
@@ -538,6 +588,26 @@ tags        = ["tor", "random-exit", "slow"]
 description = "Tor with default directory authorities"
 
 # ───────────────────────────────────────────────────────────────
+# Targets — the canonical list lives here
+# ───────────────────────────────────────────────────────────────
+
+[[targets]]
+name  = "rutracker"
+url   = "https://rutracker.org/"
+label = "RuTracker"
+
+[[targets]]
+name        = "wikipedia"
+url         = "https://en.wikipedia.org/"
+label       = "Wikipedia"
+check_types = ["http_get", "dns_lookup"]
+
+[[targets]]
+name  = "youtube"
+url   = "https://www.youtube.com/"
+label = "YouTube"
+
+# ───────────────────────────────────────────────────────────────
 # Rule tuning
 # ───────────────────────────────────────────────────────────────
 
@@ -566,9 +636,6 @@ private_resolution_expected_hostnames = ["git.internal", "kibana.internal"]
   substitution inside TOML strings. Tempting for path config but
   conflicts with the principle that secrets stay out of config
   files; if needed, narrow it to non-secret values only.
-- **Per-target probe-config overrides** stored in the DB
-  (`targets.probe_config_overrides` JSON) — already specified in
-  `STORAGE_SCHEMA.md`; cross-referenced here only for clarity.
 - **Validation library choice** (Zod vs. valibot vs. hand-rolled)
   — implementation detail; pick during build.
 

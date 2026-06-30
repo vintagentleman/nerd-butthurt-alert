@@ -101,7 +101,7 @@ type RuleOutput =
  */
 interface ProbeRecord {
   id: number;
-  target_id: number;
+  target_name: string;
   path_name: string;
   path_role: "direct" | "vantage" | "obfuscation";
   check_type: "http_get" | "dns_lookup" | "tcp_connect";
@@ -126,7 +126,7 @@ in parallel and aggregates results.
   evidence are part of the output.
 - **`clear`** — the rule's predicate did not match, *and* the rule
   wants to assert "this signal should no longer be active." The
-  engine flips any active signal for `(target_id, rule_name)` to
+  engine flips any active signal for `(target_name, rule_name)` to
   `cleared`.
 - **`no-op`** — the rule has nothing to say (predicate didn't match,
   but the rule also doesn't want to clear). Most rules short-circuit
@@ -159,7 +159,7 @@ for this target?" Within a sweep, a target's probes land one path at a
 time. If such a rule ran on each insertion, the first path's fresh
 probe would be compared against the *previous* tick's results for the
 others — so the rule would fire, then flip, then fire again as each
-remaining path reported, emitting a burst of `signal.*` WebSocket churn
+remaining path reported, emitting a burst of signal fire/clear churn
 that only resolves once the last path lands. It would also recompute
 the same cross-path picture once per path (N× the work). The barrier
 evaluates the comparison exactly once, on a consistent snapshot.
@@ -172,7 +172,7 @@ the probe's own timeout.
 
 ## Lifecycle integration
 
-When the engine receives a rule's output for `(target_id, rule_name)`:
+When the engine receives a rule's output for `(target_name, rule_name)`:
 
 | Output | Existing active signal? | Action |
 |---|---|---|
@@ -240,8 +240,8 @@ its confidence default(s) in `defaults`; the user adjusts them via
 the config file. Rules read confidence from their merged `config`
 at run time.
 
-Suggested scale (for choosing reasonable defaults and for the
-dashboard to render):
+Suggested scale (for choosing reasonable defaults and for Grafana
+to render):
 
 - **1.0** — unmistakable signature (e.g., RST mid-TLS handshake)
 - **0.85–0.95** — strong evidence, multiple corroborating signals
@@ -257,8 +257,8 @@ keys in `defaults` — e.g. `confidence_initial` and
 which one to emit. There is no built-in interpolation framework;
 rules that want non-stepwise scaling implement it in code.
 
-The dashboard renders confidence as a visual cue (color saturation,
-opacity) but does not use it as a hard threshold for display.
+Grafana renders confidence as a visual cue (panel thresholds /
+colour) but it is not a hard threshold for display.
 
 ## Evidence convention
 
@@ -266,14 +266,15 @@ opacity) but does not use it as a hard threshold for display.
 keys:
 
 - **`probe_ids`** (`number[]`) — the probes that contributed to the
-  fire. Lets the dashboard link back to source probes.
+  fire. Lets a Grafana SQLite panel link back to the source probes.
 - **`observation`** (`string`, optional) — short human-readable
   summary, ≤200 chars.
 - Rule-specific fields — fingerprints, status codes, IPs, whatever.
 
-Rules SHOULD include `probe_ids` whenever possible; the dashboard's
-drill-in flow assumes it. Rules MAY include any other diagnostic
-fields. No central schema enforcement — the column is just JSON.
+Rules SHOULD include `probe_ids` whenever possible; the evidence
+drill-in (Grafana's SQLite panel) assumes it. Rules MAY include any
+other diagnostic fields. No central schema enforcement — the column
+is just JSON.
 
 ## Per-rule config
 
@@ -361,7 +362,7 @@ higher once threshold-many consecutive failures observed.
 - **Input scope:** target-window
 - **Fires when:** `newProbe.first_failure_code == "tls_handshake_timeout"`
   AND at least one of the most recent http_get probes for
-  `(target_id, newProbe.path_name)` within `window_minutes` shares
+  `(target_name, newProbe.path_name)` within `window_minutes` shares
   the same failure. Confidence is `confidence_initial` until at
   least `min_consecutive` consecutive failures are observed, then
   `confidence_full`.
@@ -668,9 +669,9 @@ bundle is DPI-stalled over it, leaving the page broken.
   confidence = 0.8
   ```
 
-Composes with cell status: when this fires, the matrix cell renders
-`degraded` / `down` rather than a deceptive `up` — the document was
-fine, but the site is broken.
+Composes with reachability: a bare status check would call this target
+`up` (the document loaded fine), but the site is functionally broken —
+this signal is what surfaces that distinction.
 
 ### Cross-path comparison
 

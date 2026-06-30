@@ -346,8 +346,9 @@ May be absent or empty when the probe ran cleanly.
 ```
 
 The rollup is derived from `hops[]`; consumers could compute it
-on-demand, but precomputing at probe time means dashboard queries and
-simple signal rules do not have to walk the hops array.
+on-demand, but precomputing at probe time means metric derivation,
+Grafana queries, and simple signal rules do not have to walk the hops
+array.
 
 ### Completion is the target document, not the page `load` event
 

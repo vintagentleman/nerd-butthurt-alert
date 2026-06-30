@@ -3,11 +3,11 @@
 ## What this document is
 
 A companion to `ARCHITECTURE.md` and `PROBE_PAYLOAD.md`. It specifies
-the SQLite schema that persists probe records, user-managed targets,
-and rule-produced signals. Every scheduler tick writes one row to
-`probes`; every rule evaluation may insert or update a row in
-`signals`; targets are added / edited / removed via the dashboard's
-management forms.
+the SQLite schema that persists probe records and rule-produced
+signals. Every scheduler tick writes one row to `probes`; every rule
+evaluation may insert or update a row in `signals`. Targets and paths
+are **not** stored here — both are config-file entities (see
+`CONFIG_FILE.md`), referenced by name in the rows below.
 
 Backed by **`node:sqlite`** (per `ARCHITECTURE.md`). The schema keeps a
 small set of hot columns for query speed and indexing, with the full
@@ -19,15 +19,18 @@ fields) without storage migrations in most cases.
 
 Set once per connection at open, before any query:
 
-- **`PRAGMA foreign_keys = ON`** — **required.** SQLite defaults foreign
-  keys *off*, and the `ON DELETE CASCADE` on `probes.target_id` /
-  `signals.target_id` is load-bearing (deleting a target must clear its
-  probes and signals). Without this pragma the cascades silently no-op
-  and orphan rows accumulate.
-- **`PRAGMA journal_mode = WAL`** — lets the dashboard's read queries
-  run concurrently with the probe engine's writes instead of serialising
-  on a single writer lock. The natural fit for one continuous writer +
-  bursty readers.
+- **`PRAGMA foreign_keys = ON`** — harmless to set, but **not
+  load-bearing in v1.** There are no inter-table foreign keys: targets
+  and paths are config-defined and referenced by name (TEXT), not by
+  row id, so there are no cascades to enforce. Removing a target from
+  config simply stops new probes for it; its historical rows age out
+  via retention.
+- **`PRAGMA journal_mode = WAL`** — **load-bearing.** It lets external
+  readers — the metrics exporter (same process) and, crucially,
+  **Grafana's SQLite datasource (a separate process)** — read
+  concurrently with the probe engine's writes instead of serialising on
+  a single writer lock. One continuous writer plus a couple of
+  concurrent readers is exactly WAL's sweet spot.
 - **`PRAGMA busy_timeout = 5000`** — a writer waits rather than failing
   with `SQLITE_BUSY` if the DB is briefly locked.
 - **`PRAGMA synchronous = NORMAL`** — safe under WAL and avoids an fsync
@@ -35,28 +38,30 @@ Set once per connection at open, before any query:
   checkpoint, not the DB.
 
 `node:sqlite`'s API is **synchronous** — every statement blocks the
-calling thread, which is the same event-loop thread that serves the
-HTTP and WebSocket surfaces. Fine at this scale, but it makes the
-indexed, paginated read paths below load-bearing: a long unindexed scan
-would stall live probe ingestion and dashboard pushes alike. Genuinely
-heavy analytical queries belong off the hot path.
+calling thread, which is the same event-loop thread that runs the probe
+engine and serves `/metrics`. Fine at this scale, but it keeps the
+indexed read paths below load-bearing: a long unindexed scan would
+stall probe ingestion and metric serialisation alike. Grafana's heavier
+ad-hoc evidence queries run in a **separate** process against the WAL
+file, so they don't block the engine. Genuinely heavy analytical
+queries belong off the hot path.
 
 ## Tables
 
-Three core tables plus one convention sidecar:
+Two core tables plus one convention sidecar:
 
 | Table | Purpose | Source of writes |
 |---|---|---|
-| `targets` | User-managed monitoring targets | Dashboard management forms |
 | `probes` | One row per `(target, path, check_type)` probe execution | Probe engine |
 | `signals` | Rule-produced observations | Signals engine |
 | `schema_migrations` | Applied migration versions | Startup migration runner |
 
-Paths are **not** stored in the DB — they live in the configuration
-file, per `ARCHITECTURE.md`. Each probe denormalises its chosen
-path's `name` and `role` into `probes.path_name` / `probes.path_role`
-for query speed; the full path record (including `tags`) stays in
-the payload envelope.
+Neither **targets** nor **paths** are stored in the DB — both live in
+the configuration file (see `CONFIG_FILE.md` and `ARCHITECTURE.md`).
+Each probe denormalises its target's `name` and its path's `name` /
+`role` into `probes.target_name` / `probes.path_name` /
+`probes.path_role` for query speed; the full path record (including
+`tags`) stays in the payload envelope.
 
 ## `schema_migrations` (convention)
 
@@ -73,42 +78,15 @@ recorded here after success. Startup is a no-op when the highest
 version in the table equals the highest migration shipped in the
 binary.
 
-## `targets`
+## Targets and paths live in config, not here
 
-User-managed.
-
-```sql
-CREATE TABLE targets (
-  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-  url                      TEXT    NOT NULL UNIQUE,
-  label                    TEXT    NOT NULL,
-  created_at               TEXT    NOT NULL,            -- ISO 8601 UTC
-  updated_at               TEXT    NOT NULL,            -- ISO 8601 UTC
-  enabled                  INTEGER NOT NULL DEFAULT 1,  -- 0/1 boolean
-  cadence_override_seconds INTEGER,                      -- NULL = use global default
-  probe_config_overrides   TEXT                          -- JSON blob, nullable
-);
-
-CREATE INDEX idx_targets_enabled ON targets (enabled);
-```
-
-### `probe_config_overrides`
-
-JSON blob (stored as TEXT; read via SQLite's JSON1 functions). Holds
-per-target overrides for any `http_get.config.*` fields — typically
-`timeout_ms`, `body_snippet_cap_bytes`, `impersonation_profile`,
-`pinned_http_version`, `response_headers_captured`. Example:
-
-```json
-{
-  "timeout_ms": 30000,
-  "impersonation_profile": "firefox-125"
-}
-```
-
-The probe engine merges these over the global defaults at dispatch
-time. JSON rather than individual columns by design: overrides aren't
-queried, they're read once per probe; flexibility wins.
+Targets and paths are declared in the config file (`CONFIG_FILE.md`),
+not persisted as tables. Probes and signals reference a target by its
+configured **name** (`target_name`, denormalised onto each row). Per-
+target probe overrides (timeout, impersonation profile, cadence) that
+an earlier draft stored in a `targets.probe_config_overrides` JSON
+column now live on the target's config entry (`[[targets]]` in
+`CONFIG_FILE.md`). There are no `targets` or `paths` tables.
 
 ## `probes`
 
@@ -117,8 +95,7 @@ The central table. One row per probe execution.
 ```sql
 CREATE TABLE probes (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-  target_id             INTEGER NOT NULL
-                          REFERENCES targets(id) ON DELETE CASCADE,
+  target_name           TEXT    NOT NULL,       -- denormalised; the config target's name
   path_name             TEXT    NOT NULL,       -- denormalised from payload.path.name
   path_role             TEXT    NOT NULL        -- denormalised from payload.path.role
                           CHECK (path_role IN ('direct','vantage','obfuscation')),
@@ -134,7 +111,7 @@ CREATE TABLE probes (
 );
 
 CREATE INDEX idx_probes_target_path_time
-  ON probes (target_id, path_name, started_at DESC);
+  ON probes (target_name, path_name, started_at DESC);
 
 CREATE INDEX idx_probes_time
   ON probes (started_at DESC);
@@ -149,7 +126,8 @@ CREATE INDEX idx_probes_failure
 Every hot column is a duplicate of something present in the payload.
 The duplication buys query speed:
 
-- Matrix-view "latest probe per `(target, path_name)`" uses
+- "Latest probe per `(target_name, path_name)`" — the metrics
+  exporter's gauge seed and Grafana's status matrix — uses
   `idx_probes_target_path_time` without touching JSON.
 - Signal-rule windows over recent probes use `idx_probes_time`
   without JSON.
@@ -222,8 +200,7 @@ Rule outputs. Each row is one named rule's judgment about a target.
 ```sql
 CREATE TABLE signals (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  target_id     INTEGER NOT NULL
-                  REFERENCES targets(id) ON DELETE CASCADE,
+  target_name   TEXT    NOT NULL,   -- the config target's name
   rule_name     TEXT    NOT NULL,
   status        TEXT    NOT NULL
                   CHECK (status IN ('active','cleared'))
@@ -238,11 +215,11 @@ CREATE TABLE signals (
 
 -- At most one ACTIVE signal per (target, rule).
 CREATE UNIQUE INDEX idx_signals_active_unique
-  ON signals (target_id, rule_name)
+  ON signals (target_name, rule_name)
   WHERE status = 'active';
 
 CREATE INDEX idx_signals_target_status
-  ON signals (target_id, status);
+  ON signals (target_name, status);
 
 CREATE INDEX idx_signals_active_fired_at
   ON signals (fired_at DESC)
@@ -253,7 +230,7 @@ CREATE INDEX idx_signals_active_fired_at
 
 A rule evaluating a target produces one of three outcomes:
 
-1. **Fire, new.** No active signal exists for `(target_id, rule_name)`.
+1. **Fire, new.** No active signal exists for `(target_name, rule_name)`.
    Insert a new row with `status='active'`, `fired_at=now`,
    `last_seen_at=now`.
 2. **Fire, continuing.** An active signal already exists. Update
@@ -301,7 +278,6 @@ Default policy (v1):
   configurable via the global config file (`retention_days`).
 - **`signals`**: retained **indefinitely**. Row volume is tiny; the
   history is informative.
-- **`targets`**: no retention (user-managed).
 
 ### Why 30 days raw and no rollups in v1
 
@@ -317,14 +293,15 @@ scope.
 
 ## Query patterns the schema is optimised for
 
-The index set targets these dashboard and signal-engine workloads:
+The index set targets these exporter, Grafana, and signal-engine
+workloads:
 
-**Matrix view** — latest probe for a `(target, path_name, check_type)`
-triple:
+**Status matrix** — latest probe for a `(target_name, path_name,
+check_type)` triple (the exporter's gauge seed; Grafana's matrix):
 
 ```sql
 SELECT * FROM probes
-WHERE target_id = ? AND path_name = ? AND check_type = ?
+WHERE target_name = ? AND path_name = ? AND check_type = ?
 ORDER BY started_at DESC LIMIT 1;
 ```
 
@@ -335,7 +312,7 @@ minutes:
 
 ```sql
 SELECT * FROM probes
-WHERE target_id = ? AND started_at > ?
+WHERE target_name = ? AND started_at > ?
 ORDER BY started_at DESC;
 ```
 
@@ -356,12 +333,12 @@ Covered by `idx_probes_failure` + `idx_probes_time`.
 
 ```sql
 SELECT * FROM signals
-WHERE target_id = ? AND status = 'active';
+WHERE target_name = ? AND status = 'active';
 ```
 
 Covered by `idx_signals_target_status`.
 
-**Global active-signals feed** — dashboard live view:
+**Global active-signals feed** — exporter seed / Grafana signal table:
 
 ```sql
 SELECT * FROM signals
@@ -375,8 +352,8 @@ Covered by `idx_signals_active_fired_at`.
 
 Acknowledged to set expectations; these become v2+ concerns:
 
-- **Full-text search on body snippets.** Not indexed. Dashboard body
-  drill-ins read the JSON column directly; fine at human scale but
+- **Full-text search on body snippets.** Not indexed. Grafana's SQLite
+  drill-in reads the JSON column directly; fine at human scale but
   doesn't scale to "find every probe where the body contains X."
   Candidate for SQLite FTS5 virtual table in a later iteration.
 - **Cross-target aggregations.** No rollup tables. Queries like "what

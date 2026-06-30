@@ -7,8 +7,8 @@ reachability and integrity of arbitrary internet endpoints. Its job is
 to capture raw evidence of how network paths behave — latency, TLS
 handshake details, response characteristics, DNS answers, failure
 modes — across a user-defined set of routes (direct, via a VPN, via a
-DPI-bypass proxy, through a remote jumpbox, etc.) and present that
-evidence continuously in a live dashboard.
+DPI-bypass proxy, through a remote jumpbox, etc.) and surface that
+evidence continuously through a metrics endpoint and Grafana.
 
 The ethos is borrowed from OONI probe: **capture widely, interpret
 later.** This tool is not primarily an alerting system; it is a
@@ -16,22 +16,41 @@ diagnostic observatory.
 
 ### Pivot context
 
-This project was originally drafted as a hackathon submission
-("Operational Continuity Agent") targeting corporate SREs: hardcoded
-RU/EU OpenConnect VPN labels, Mattermost alert threading, an LLM
-agent producing fixed-enum diagnoses. With the hackathon off the
-table, the design has been re-pointed at personal use. This
-document is the post-pivot v0 architecture; `PATH_DEPLOYMENTS.md`
-("Reference path deployments") is its first sub-document.
+This project has pivoted twice.
+
+1. **Hackathon → personal.** Originally drafted as a hackathon
+   submission ("Operational Continuity Agent") targeting corporate
+   SREs: hardcoded RU/EU OpenConnect VPN labels, Mattermost alert
+   threading, an LLM agent producing fixed-enum diagnoses. With the
+   hackathon off the table, the design was re-pointed at personal use.
+2. **Custom frontend → Prometheus + Grafana (2026-06-30).** The
+   earlier v0 carried a bespoke SvelteKit dashboard (a target × path
+   matrix, a signals browser, native-primitive component work, a CRT
+   visual language) plus a hand-rolled HTTP REST + WebSocket API to
+   feed it. That surface was the project's single largest sink of
+   open-ended effort and stalled the work for months. It is **dropped**
+   in favour of an industry-standard observability stack: the service
+   exposes a Prometheus **`/metrics`** endpoint, and **Grafana** owns
+   all visualization (live dashboards, time-series, the status matrix)
+   and alerting. The bespoke REST/WebSocket API and the SvelteKit app
+   are gone. See `OBSERVABILITY.md`.
+
+This document is the post-pivot v0 architecture.
 
 ## Non-goals for v1
 
 - **LLM integration of any kind.** Qualitative diagnostics come from
   deterministic heuristic rules instead. LLM-authored explanatory
   reports are a candidate later-phase feature.
-- **Webhooks, push notifications, external messaging integrations**
-  (Mattermost, Slack, email, ntfy, etc.). The only surface is the
-  dashboard.
+- **A custom frontend / UI framework.** No SvelteKit, no React, no
+  bespoke component work, no in-house dashboard. Visualization is
+  Grafana, consuming Prometheus + the SQLite evidence store.
+- **A bespoke HTTP REST or WebSocket API.** The only HTTP surface the
+  service exposes is the Prometheus scrape endpoint (`/metrics`).
+- **The application shipping webhooks, push, or external messaging**
+  (Mattermost, Slack, email, ntfy, etc.). Notifications, if wanted,
+  are configured in Grafana by the user — the app itself integrates
+  none.
 - **Alert dampening, on-call workflows, incident management.**
 - **Hardcoded knowledge of any specific VPN, proxy, or transport.**
   No `CORPORATE_VPN` path, no `DPI_BYPASS` path. Paths are purely
@@ -45,7 +64,12 @@ document is the post-pivot v0 architecture; `PATH_DEPLOYMENTS.md`
 
 **Target.** An internet endpoint to monitor. Minimally a URL
 (protocol + host + path) with a human-readable label. Targets are
-user-managed via the dashboard.
+**defined in the configuration file**, exactly like paths — declared
+once, applied at startup (see `CONFIG_FILE.md`). They are referenced
+by name in probe and signal records. (Earlier drafts stored targets
+in the database and managed them through dashboard forms; with no UI,
+the runtime-mutation justification is gone, and config-file targets
+are consistent with config-file paths.)
 
 **Path.** A named route through which the tool reaches the internet.
 From the application's perspective, a path is a named SOCKS5 URL (or
@@ -76,19 +100,24 @@ active signals, and new rules can be added without schema change.
 
 ```mermaid
 flowchart LR
-  cfg[Config file] --> paths[Path Provider]
+  cfg[Config file] --> paths[Config Provider]
   cfg --> signals[Signals Engine]
-  sched[Scheduler] --> probe[Probe Worker]
-  paths --> probe
+  paths --> probe[Probe Worker]
+  sched[Scheduler] --> probe
   probe --> storage[(SQLite)]
   probe --> signals
   signals --> storage
-  probe --> ws[WebSocket]
-  signals --> ws
-  ws --> ui[Dashboard]
-  ui --> api[HTTP API]
-  api --> storage
+  storage --> exporter[Metrics Exporter]
+  exporter -->|/metrics| prom[(Prometheus)]
+  prom --> graf[Grafana]
+  storage -.read-only.-> graf
 ```
+
+The flow is one direction: probes and signals are written to SQLite;
+the metrics exporter derives current-state gauges/counters from that
+store and exposes them at `/metrics`; Prometheus scrapes on its own
+interval; Grafana reads Prometheus for time-series and the SQLite file
+directly (read-only) for raw evidence drill-ins.
 
 ### Probe data flow (server-driven, one direction)
 
@@ -102,48 +131,35 @@ flowchart LR
    check types (HTTP GET at minimum; optionally DNS-only lookup,
    TCP-connect-only), captures raw evidence, and returns an outcome.
 3. Each probe outcome is persisted to the `probes` table: hot
-   columns (target, path, check type, timestamp, runtime, reached
+   columns (target name, path, check type, timestamp, runtime, reached
    stage, first failure code, …) plus the full payload as a JSON
    blob. See `STORAGE_SCHEMA.md` for the column-level detail and
    `PROBE_PAYLOAD.md` for the payload structure.
-4. The **signals engine** evaluates rules in two phases. Single-probe
-   and target-window rules run immediately on the new probe (with
-   recent history for that target). Cross-path rules — which compare the
-   latest result across *all* of a target's paths — are deferred to a
-   **sweep barrier**: they run once per target after that target's
-   probes for the tick have all settled, so they never compare this
-   tick's path against last tick's others. Both phases persist any
+4. The **signals engine** evaluates the new probe — along with recent
+   history for that target — against its rule set, persisting any
    fresh signals.
-5. The **WebSocket layer** pushes delta events to connected
-   dashboard clients: one message per probe insertion, one per
-   signal transition, one per target mutation. The dashboard's
-   matrix view updates cell state accordingly. See `API.md` for
-   message types and shapes.
+5. The **metrics exporter** reflects the latest persisted state. On
+   each Prometheus scrape of `/metrics` it emits the current gauges
+   and counters (probe up/down, latency, reached stage, active signals
+   by rule, …) derived from SQLite. Prometheus stores the time-series;
+   Grafana renders dashboards and evaluates alert rules over them. See
+   `OBSERVABILITY.md` for the metric inventory and dashboard set.
 
-### Configuration and command flow (inbound)
+### Configuration flow (inbound)
 
-Two distinct inbound channels feed the system:
-
-- **Static configuration** — path definitions, signal rule tuning
-  constants (thresholds, suspicious-size boundaries, time windows),
-  cadence defaults, server port. Read from a config file at startup.
-  File-based for v1 by design: paths are not managed through the UI,
-  and tuning is a deliberate act, not a runtime knob. Reload
-  semantics are deferred to the config sub-document.
-- **Target management** — add / label / remove targets. A runtime
-  operation through the dashboard: HTTP POST to management
-  endpoints, writing to storage, which the probe worker picks up at
-  the next scheduler tick. Targets are the one entity that changes
-  often enough to justify a UI.
-
-The WebSocket carries server → client deltas; the HTTP API carries
-UI → server mutations and on-demand reads. WS is structurally
-bidirectional but v0 uses it server-push only; client-originated
-WS messages are reserved for future subscriptions / filters.
+There is a single inbound channel: the **config file**. Path
+definitions, target definitions, signal-rule tuning constants
+(thresholds, suspicious-size boundaries, time windows), cadence
+defaults, and the metrics-exporter bind settings are all read from a
+layered TOML config at startup. File-based by design: nothing in v1 is
+managed through a UI, and tuning is a deliberate act, not a runtime
+knob. Reload semantics: v0 has none — restart to apply (see
+`CONFIG_FILE.md`).
 
 ## Component architecture
 
-All components live in a single process.
+All application components live in a single process. Prometheus and
+Grafana are separate, standard services (see "Deployment shape").
 
 **Probe engine.** Runs scheduled probes. Holds no persistent state
 beyond in-flight probe futures. Takes a `(target, path)` as input;
@@ -152,59 +168,54 @@ produces a probe outcome. `http_get` is backed by Playwright (see
 `node:dns` and `node:net` respectively. Check types (`http_get`,
 `dns_lookup`, `tcp_connect`) are the extensibility seam.
 
-**Path provider.** Reads path definitions from the config file at
-startup and exposes the live list to the probe engine. The app does
-not start, stop, or health-check the proxy processes themselves —
-that is the user's responsibility. Reference deployment recipes
-ship alongside as worked examples in `PATH_DEPLOYMENTS.md`, not as
-runtime dependencies.
+**Config provider.** Reads path and target definitions (plus all
+tuning) from the layered config file at startup and exposes the live
+lists to the probe engine and signals engine. The app does not start,
+stop, or health-check the proxy processes themselves — that is the
+user's responsibility. Reference deployment recipes ship alongside as
+worked examples in `PATH_DEPLOYMENTS.md`, not as runtime dependencies.
 
-**Storage.** SQLite via `node:sqlite`. Tables for targets, probes
-(with a JSON payload column absorbing schema evolution), and
-signals. Schema, indexes, retention policy, and lifecycle details
-in `STORAGE_SCHEMA.md`. Paths are *not* stored in the database in
-v1; they live in the config file and are re-read on restart.
+**Storage.** SQLite via `node:sqlite`. Two tables for probes (with a
+JSON payload column absorbing schema evolution) and signals, plus a
+`schema_migrations` sidecar. Schema, indexes, retention policy, and
+lifecycle details in `STORAGE_SCHEMA.md`. Neither paths nor targets
+are stored in the database in v1 — both live in the config file and
+are re-read on restart; probes and signals reference them by name. The
+database file is opened in WAL mode so Grafana's SQLite datasource can
+read it concurrently with the engine's writes.
 
 **Signals engine.** A set of pure-ish async functions, each
 evaluating some slice of probe data and returning 0..n signals
-(fire / clear / no-op). Runs in two phases: single-probe and
-target-window rules fire per probe insertion; cross-path rules run
-once per target at a sweep barrier, after the tick's probes settle
-(see `SIGNAL_RULES.md`). Rules are plain
+(fire / clear / no-op). Runs after each probe. Rules are plain
 TypeScript modules under `src/signals/rules/`; adding a rule means
 adding a file — auto-discovered at startup, no central registry.
 All thresholds and confidence values live in the config file, not
 in code. Catalogue and contract in `SIGNAL_RULES.md`.
 
-**API + WebSocket layer.** Two surfaces under `/api/v1/`. HTTP
-JSON REST endpoints for targets (CRUD) and read-only queries
-against probes, signals, paths, plus a `dashboard/snapshot`
-convenience endpoint for first paint. A WebSocket channel at
-`/api/v1/events` pushes live deltas (probe insertions, signal
-transitions, target mutations) to connected dashboard clients.
-Zod v4 schemas in `src/api/schemas/` are the single source of
-truth — used for server-side request validation and SvelteKit
-client typing. SvelteKit form actions back the management UI and
-share the same schemas. Paths are read-only through this API in v1
-(they come from the config file). See `API.md`.
+**Metrics exporter.** A minimal HTTP endpoint (`node:http`, no web
+framework) serving Prometheus text-format metrics at `/metrics`,
+built on `prom-client`. It derives a bounded set of gauges and
+counters — probe up/down, last latency and a latency histogram,
+reached-stage, probe/error counts, active-signal state and confidence
+— from the latest rows in SQLite at scrape time. Strict label
+cardinality discipline (target, path, check_type, rule, outcome,
+stage, code only — never probe ids, URLs, or timestamps as labels).
+Full contract and metric inventory in `OBSERVABILITY.md`.
 
-**Dashboard.** SvelteKit frontend. Primary view is a target × path
-matrix with live status cells. Secondary views (per-probe drill-in,
-target time-series, signal browser) are deferred to the dashboard
-sub-document. Interactive primitives are native elements
-(`<dialog>`, `<details>`, native form controls, Popover API) — no
-component library; styling methodology in `STYLING.md`. A
-responsive layout is an architectural baseline — the dashboard is
-expected to be usable from a phone (typical scenario: the tool
-running on a home server, monitored from a phone on the same
-network).
+**Visualization — Grafana (external).** Grafana is the entire UI. It
+reads two data sources: **Prometheus** (the scraped time-series — the
+status matrix via state-timeline/status-history panels, latency
+trends, signal activity) and the **SQLite** evidence store, read-only,
+for raw-probe drill-in tables (per-hop detail, cert chains, body
+shape, the full payload JSON). Alerting, if the user wants it, is
+configured in Grafana. Datasource definitions and dashboard JSON are
+committed to the repo and provisioned into Grafana (see
+`OBSERVABILITY.md`); Grafana is not part of the application process.
 
 ## Technology choices
 
-**Node.js 26 runtime.** Built-in `node:sqlite` (a release candidate —
-Stability 1.2 — as of Node 24–26: no flag required, though it still
-emits an `ExperimentalWarning` and the API isn't frozen; no
-`better-sqlite3` bundling pain), the stable Temporal API for
+**Node.js 26 runtime.** Built-in `node:sqlite` (stable since Node
+24, no `better-sqlite3` bundling pain), stable Temporal API for
 datetime handling, native WHATWG `fetch`, built-in test runner, and
 the broader ecosystem maturity that comes with Node. TypeScript
 throughout (via `--experimental-strip-types`, `tsx`, or pre-compile
@@ -213,32 +224,31 @@ Bun for some of the same affordances; Node 26 closed the gap that
 originally favored Bun, and the broader ecosystem tipped the
 balance.
 
-**SvelteKit, as a monolith.** One repo, one process: the probe
-engine, the HTTP + WebSocket API, and the UI all live inside one
-SvelteKit project. Rationale: the OONI-ish data trajectory (time-
-series views, cross-filtering, per-probe drill-in) will want a
-component framework sooner rather than later, and SvelteKit's form
-actions cover the management surface cleanly without bespoke glue.
-`adapter-node` for production builds.
+**A single Node service — no web framework.** One repo, one process:
+the probe engine, the signals engine, the SQLite store, and the
+metrics exporter all live inside one Node program. The only HTTP it
+serves is `/metrics`, which needs nothing more than `node:http` +
+`prom-client`. The earlier SvelteKit-monolith rationale (form actions,
+a component framework for the matrix/time-series views) is moot now
+that Grafana owns visualization. `adapter-node`, `ws`, the SvelteKit
+build — all dropped.
 
-**`node:sqlite`.** Built-in to Node since v22.5; a release candidate
-(Stability 1.2) through v24–v26 — usable without a flag but still
-emitting an `ExperimentalWarning` and not yet API-frozen. Single-file
-DB, zero deployment friction, more than fast enough for the probe
-throughput at hand. Connection settings (WAL, `foreign_keys`,
-`busy_timeout`) and the synchronous-API implication are pinned in
-`STORAGE_SCHEMA.md`.
+**`node:sqlite`.** Built-in to Node since v22 (stable in v24+),
+single-file DB, zero deployment friction, more than fast enough for
+the probe throughput at hand. WAL mode lets Grafana's SQLite datasource
+read the same file concurrently with the engine's writes.
 
-**Native platform primitives — no component library.** Every
-interactive primitive (`<dialog>`, `<details>`, native form
-controls, Popover API + CSS anchor positioning) is native, styled
-with plain CSS over Svelte's scoped styles. No Shoelace, no Bits UI,
-no Tailwind. Design tokens via [Open Props](https://open-props.style/)
-(zero-runtime CSS custom properties) layered under our own semantic
-tokens; charts via [uPlot](https://github.com/leeoniya/uPlot) when
-the time-series view lands. Browser target is `baseline newly
-available`, linter-enforced (see `TOOLING.md`). Full methodology in
-`STYLING.md`.
+**`prom-client`.** The de-facto Prometheus client for Node. Provides
+the registry, gauge/counter/histogram primitives, and the text
+exposition format. Zero-config integration with Prometheus scraping.
+
+**Prometheus + Grafana.** The visualization and alerting stack, run
+as standard containers. Prometheus scrapes `/metrics` and stores the
+time-series; Grafana dashboards and alert rules sit on top. This
+trades an unbounded bespoke-frontend effort for a bounded, finishable
+integration — and delivers the time-series views (latency over time,
+uptime) that the custom dashboard had deferred to "post-MVP," for
+free. See `OBSERVABILITY.md`.
 
 **Playwright.** Headless browser automation for `http_get` probes
 (Chromium / Firefox / WebKit). Picked over `curl-impersonate` and
@@ -250,20 +260,27 @@ shape it produces.
 
 **Other notable dependencies.** [`croner`](https://github.com/Hexagon/croner)
 for in-process cron-style scheduling with overlap protection.
-[Zod v4](https://zod.dev) for shared HTTP / WebSocket schemas.
-[`ws`](https://github.com/websockets/ws) as the WebSocket server
-library, attached to SvelteKit's HTTP server via `adapter-node`
-hooks.
+[Zod v4](https://zod.dev) for validating the merged config at
+startup (fatal on failure) — no longer an API-schema concern, just
+config sanity.
 
 ## Deployment shape
 
-One Node + SvelteKit process. Runs locally or on a small VPS. Reads
-and writes one SQLite file plus one config file. Serves the
-dashboard on a port.
+Three pieces, plus the user's own proxies:
 
-Separately, the user runs whatever proxy containers or services they
-want; each exposes a SOCKS5 port that a path definition references.
-The tool does not orchestrate those containers.
+1. **The Node service** — probe engine + signals engine + SQLite +
+   `/metrics`. Runs locally or on a small VPS. Reads one config file,
+   reads/writes one SQLite file, serves `/metrics` on a port.
+2. **Prometheus** — scrapes `/metrics` on its interval; stores the
+   time-series; ships a committed `prometheus.yml` scrape config.
+3. **Grafana** — reads Prometheus and the SQLite file (read-only);
+   datasources and dashboards are provisioned from committed files.
+
+A reference `docker-compose.yml` brings up all three (the SQLite file
+bind-mounted into both the service and Grafana). Separately, the user
+runs whatever proxy containers or services they want; each exposes a
+SOCKS5 port that a path definition references. The tool does not
+orchestrate those containers.
 
 Reference proxy deployments (an OpenConnect+oathtool Dockerfile, a
 WireGuard-via-SOCKS recipe, etc.) ship alongside as worked examples,
@@ -272,7 +289,7 @@ not dependencies.
 ## Sub-documents
 
 Specific areas factored out of this document for independent
-iteration. Each becomes its own file.
+iteration. Each is its own file.
 
 ### Written
 
@@ -289,71 +306,51 @@ iteration. Each becomes its own file.
   per-op `failure` factual model, body-shape signals, and the
   error-code taxonomy.
 - **Storage schema** (`STORAGE_SCHEMA.md`). SQLite tables for
-  `targets`, `probes`, `signals` (paths stay in config). Hot columns
-  + JSON payload blob. Signal lifecycle (active / cleared, rule-
-  responsible clearing). 30-day retention, no rollups in v1. TEXT
-  ISO 8601 datetimes.
+  `probes` and `signals` (paths and targets stay in config). Hot
+  columns + JSON payload blob. Signal lifecycle (active / cleared,
+  rule-responsible clearing). 30-day retention, no rollups in v1.
+  TEXT ISO 8601 datetimes.
 - **Signal rule catalogue** (`SIGNAL_RULES.md`). The `Rule`
   contract (pure-ish async function, three-outcome model), the
   storage reader API rules use to query history, the v1 catalogue
-  of 17 rules across 7 categories (TLS / DNS interference, target-
-  initiated unavailability, reachability, stream interference,
-  cross-path comparison, perf), and an "adding your own rule" appendix
-  with a worked example. Rules auto-discovered from `src/signals/rules/`.
-  All
+  of rules across several categories (TLS / DNS interference, target-
+  initiated unavailability, reachability, cross-path comparison,
+  perf), and an "adding your own rule" appendix with a worked
+  example. Rules auto-discovered from `src/signals/rules/`. All
   thresholds and confidence values are config (under
   `rules.<rule_name>.*`), not code constants.
 - **Configuration file format** (`CONFIG_FILE.md`). TOML, layered
   (`config/default.toml` → `<NODE_ENV>.toml` → `local.toml`),
-  node-config-style. Schema covers server / storage / scheduler /
-  probe defaults / body-shape detection / paths / per-rule
-  config. Secrets stay out; v0 has no hot-reload (restart to
-  apply).
-- **HTTP and WebSocket API** (`API.md`). JSON REST endpoints under
-  `/api/v1/` for targets (CRUD), paths (read-only), probes and
-  signals (read), plus `GET /api/v1/dashboard/snapshot` for first
-  paint. WebSocket channel at `/api/v1/events` multiplexing
-  `probe.inserted` / `signal.{fired,updated,cleared}` /
-  `target.{created,updated,deleted}`. Shared Zod v4 schemas as the
-  single source of truth for both ends. v0 has no auth (localhost-
-  bound) and no event replay (snapshot re-fetch on reconnect).
+  node-config-style. Schema covers metrics exporter / storage /
+  scheduler / probe defaults / body-shape detection / **paths /
+  targets** / per-rule config. Secrets stay out; v0 has no
+  hot-reload (restart to apply).
+- **Observability** (`OBSERVABILITY.md`). The `/metrics` Prometheus
+  endpoint and its metric inventory + label-cardinality discipline;
+  Grafana data sources (Prometheus + the SQLite evidence store);
+  the dashboard inventory (status matrix, latency time-series, signal
+  table, raw-probe drill-in); Grafana-native alerting; and the
+  committed provisioning files (`prometheus.yml`, Grafana datasources
+  and dashboards).
 - **Tooling and conventions** (`TOOLING.md`). Developer-side
   toolchain — pnpm, TypeScript strict, ESLint 10+ flat config,
-  Prettier, Stylelint, Markuplint, markdownlint-cli2, svelte-check,
-  Vitest. Conventional Commits via commitlint with a project-
-  specific scope list. Native Git hooks via `core.hooksPath` +
-  `.githooks/` + a `prepare` script (no lefthook / husky / lint-
-  staged). Push policy: no agent autopush. Browser target is
-  `baseline newly available`, enforced by `stylelint-plugin-use-
-  baseline` (CSS) + `eslint-plugin-compat` (JS). CI / Renovate /
-  spellcheck explicitly out of scope.
-- **Dashboard** (`DASHBOARD.md`). The **structural** layer only —
-  view inventory + routes (matrix, probe drill-in, signals
-  sidebar + browse page, targets management, paths overview),
-  component decomposition (shared `SignalList`, bespoke matrix
-  grid), per-view data dependencies, the Svelte store model fed by
-  the WebSocket stream, responsive strategy (matrix → per-target
-  card list on narrow screens), and the native-primitive mapping
-  (no component library; `<dialog>` / `<details>` / native form
-  controls; cell-hover tooltip as a desktop progressive
-  enhancement). Visual design is explicitly out of scope and
-  iterated separately. Time-series view is post-MVP.
-- **Styling architecture** (`STYLING.md`). CSS methodology — cascade
-  layers, two-tier design tokens (Open Props primitives + semantic
-  layer), `light-dark()` theming, container-queries-for-components /
-  media-queries-for-viewport, Svelte scoped styles (so no BEM-style
-  naming methodology), logical properties. Architecture is firm;
-  concrete values set during visual exploration.
+  Prettier, markdownlint-cli2, Vitest. Conventional Commits via
+  commitlint with a project-specific scope list. Native Git hooks via
+  `core.hooksPath` + `.githooks/` + a `prepare` script (no lefthook /
+  husky / lint-staged). Push policy: no agent autopush. CI / Renovate
+  / spellcheck explicitly out of scope.
 
-All sub-documents are now drafted (v0). `CLAUDE.md` — consolidating
-the durable agent-facing conventions — is the remaining
-documentation artifact before/alongside implementation.
+All sub-documents are drafted (v0). `CLAUDE.md` — consolidating the
+durable agent-facing conventions — is the remaining documentation
+artifact before/alongside implementation.
 
 ## Out of scope entirely
 
-Multi-user operation. Authentication. Cloud-native deployment. Any
-alerting story beyond the dashboard. LLM integration. Long-term
-time-series analytics beyond what the dashboard surfaces directly.
+Multi-user operation. Authentication. Cloud-native deployment. A
+custom frontend or in-house dashboard of any kind. Any alerting story
+the application itself owns (Grafana handles alerting externally).
+LLM integration. Long-term time-series analytics beyond what
+Prometheus retention and Grafana surface directly.
 
 ---
 
