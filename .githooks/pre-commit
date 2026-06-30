@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+pnpm exec eslint . --max-warnings 0
+pnpm exec prettier --check .
+pnpm exec tsc --noEmit
+pnpm exec vitest run

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+if grep -qiE '^\s*Co-authored-by:' "$1"; then
+  echo "commit-msg: Co-Authored-By trailers are forbidden in this project." >&2
+  exit 1
+fi
+pnpm exec commitlint --edit "$1"
