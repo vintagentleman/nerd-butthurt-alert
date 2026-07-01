@@ -1,0 +1,40 @@
+[metrics]
+host      = "127.0.0.1"
+port      = 9974
+path      = "/metrics"
+log_level = "info"     # trace | debug | info | warn | error (accepted; not wired in M1)
+
+[storage]
+db_path        = "./data/probes.db"
+retention_days = 30    # raw probes; signals indefinite (cleanup job is M2)
+
+[scheduler]
+http_get_cadence_seconds    = 900   # 15 min (M1 consumes this one)
+dns_lookup_cadence_seconds  = 300   # 5 min (consumed from M2)
+tcp_connect_cadence_seconds = 300   # 5 min (consumed from M2)
+
+[probes]
+default_timeout_ms             = 10000
+default_impersonation_profile  = "chromium-latest"   # M1 always launches Chromium
+default_body_snippet_cap_bytes = 32768
+
+[probes.shape_detection]
+unavailability_phrases = [
+  "unavailable in your region",
+  "not available in your country",
+  "unavailable for legal reasons",
+  "service unavailable",
+  "blocked",
+  "Access Denied",
+]
+
+# Paths and targets live in config/local.toml (see config/local.toml.example).
+# default.toml ships none; the app warns if the merged lists are empty.
+# [[paths]]
+# name = "direct"
+# role = "direct"
+
+# [[targets]]
+# name        = "example"
+# url         = "https://example.com/"
+# check_types = ["http_get"]

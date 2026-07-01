@@ -109,3 +109,5 @@ export const appConfigSchema = z.strictObject({
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
+export type ProbesConfig = z.infer<typeof probesSchema>;
+export type ProbeOverrides = z.infer<typeof probeOverridesSchema>;

@@ -1,0 +1,9 @@
+[[paths]]
+name = "direct"
+role = "direct"
+
+[[targets]]
+name        = "example"
+url         = "https://example.com/"
+label       = "Example"
+check_types = ["http_get"]

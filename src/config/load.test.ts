@@ -289,4 +289,20 @@ port = 999999
 		await mkdir(join(tmpDir, 'local.toml'));
 		expect(() => loadConfig({ configDir: tmpDir, env: 'test' })).toThrow();
 	});
+
+	test('parses the committed config/default.toml without throwing', () => {
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		// default.toml ships no targets, so the "zero enabled targets" warning
+		// is expected here — that's fine, this test only proves the real file
+		// parses through the schemas end to end.
+		const config = loadConfig({ configDir: './config' });
+		expect(config.metrics.host).toBe('127.0.0.1');
+		expect(config.metrics.port).toBe(9974);
+		expect(config.metrics.path).toBe('/metrics');
+		expect(config.storage.db_path).toBe('./data/probes.db');
+		expect(config.scheduler.http_get_cadence_seconds).toBe(900);
+		expect(config.probes.default_timeout_ms).toBe(10000);
+		expect(config.probes.shape_detection.unavailability_phrases.length).toBeGreaterThan(0);
+		warnSpy.mockRestore();
+	});
 });
