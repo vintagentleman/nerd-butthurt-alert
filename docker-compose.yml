@@ -1,4 +1,7 @@
 services:
+  # For this container to scrape the host-run service, the service must bind
+  # metrics.host = "0.0.0.0" (see config/local.toml.example) — the default
+  # 127.0.0.1 is loopback-only and unreachable via host.docker.internal.
   prometheus:
     image: prom/prometheus:latest
     ports:

@@ -1,3 +1,9 @@
+# Uncomment to let a Prometheus CONTAINER scrape this host-run service:
+# the default 127.0.0.1 bind is loopback-only and unreachable via
+# docker-compose's host.docker.internal. (Binds all interfaces — dev only.)
+# [metrics]
+# host = "0.0.0.0"
+
 [[paths]]
 name = "direct"
 role = "direct"
