@@ -109,6 +109,30 @@ describe('buildSweep', () => {
 		expect(rows[0]?.first_failure_code).toBe('unknown_failure');
 		expect(rows[0]?.runtime_ms).toBeGreaterThan(0);
 	});
+
+	test('a target whose check_types excludes http_get is skipped entirely', async () => {
+		const config = buildTestConfig(`${server.url}/ok`);
+		config.targets = [
+			{
+				name: 'fixture',
+				url: `${server.url}/ok`,
+				enabled: true,
+				check_types: ['dns_lookup'],
+			},
+		];
+		let callCount = 0;
+		const spyHttpGet: typeof runHttpGet = async (args) => {
+			callCount++;
+			return runHttpGet(args);
+		};
+		const sweep = buildSweep({ config, db, metrics, httpGet: spyHttpGet });
+
+		await sweep();
+
+		expect(callCount).toBe(0);
+		const rows = db.prepare('SELECT * FROM probes').all();
+		expect(rows).toHaveLength(0);
+	});
 });
 
 describe('ensureParentDir', () => {

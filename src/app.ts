@@ -76,6 +76,7 @@ export function buildSweep(deps: SweepDeps): () => Promise<void> {
 	return async () => {
 		for (const target of deps.config.targets) {
 			if (!target.enabled) continue;
+			if (!target.check_types.includes('http_get')) continue; // M1: http_get is the only check type
 			for (const path of deps.config.paths) {
 				if (path.role !== 'direct') continue; // M1: direct only
 				const pc = mergeProbeConfig(deps.config.probes, target.probe_overrides);
