@@ -165,7 +165,9 @@ export interface NetworkEvent {
 
 export interface RedirectChainEntry {
 	url: string;
-	status: number;
+	// null for intermediate hops: the browser's high-level API doesn't expose
+	// their redirect code, and PROBE_PAYLOAD.md forbids fabricating it.
+	status: number | null;
 }
 
 export interface ProbeRollup {
