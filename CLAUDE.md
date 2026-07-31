@@ -22,7 +22,7 @@ Prometheus). Breadth (more check types, proxied paths, the rule
 catalogue, Grafana) is layered on afterward, milestone by milestone. This
 ordering is deliberate: it's the hedge against the project's standing
 failure mode — chasing an unbounded surface (full probe fidelity, the
-17-rule catalogue, exhaustive coverage) before anything runs end-to-end.
+19-rule catalogue, exhaustive coverage) before anything runs end-to-end.
 Don't front-load later-milestone scope into an earlier task because it
 seems related; defer it explicitly instead.
 

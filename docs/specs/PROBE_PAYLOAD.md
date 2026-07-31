@@ -457,7 +457,7 @@ disagreement is signal, not error.
 ```jsonc
 "data": {
   "config": {
-    "query_types": ["A", "AAAA"],         // array; both queried by default
+    "query_types": ["A", "AAAA", "HTTPS"], // A/AAAA by default; HTTPS (type 65) captures ALPN + ECH steering
     "resolver_address": "1.1.1.1",
     "resolver_type": "udp53",              // system | udp53 | dot | doh
     "timeout_ms": 5000
@@ -482,15 +482,40 @@ disagreement is signal, not error.
       "answers": [ /* ... */ ],
       "failure": null,
       "offset_ms": 18
+    },
+    {
+      "hostname": "example.com",
+      "query_type": "HTTPS",
+      "answers": [
+        {
+          "answer_type": "HTTPS",
+          "priority": 1,
+          "target": ".",              // "." = same origin; SvcParams apply to the query name
+          "alpn": ["h3", "h2"],       // advertised protocols; h3 first steers browsers onto QUIC
+          "has_ech_config": true,     // an ECHConfig is present in the `ech` SvcParam
+          "ipv4hint": ["93.184.216.34"],
+          "ipv6hint": []
+        }
+      ],
+      "failure": null,
+      "offset_ms": 24
     }
   ]
 }
 ```
 
-The per-answer element (`{ answer_type, ipv4 | ipv6, ttl }`) is shared
-with `http_get.hops[].dns.answers` — but recall that for `http_get`
-that array is always empty (CDP can't supply it), so in practice only
-`dns_lookup` populates answers. `failure` codes (`dns_nxdomain`,
+The A/AAAA per-answer element (`{ answer_type, ipv4 | ipv6, ttl }`) is
+shared with `http_get.hops[].dns.answers` — but recall that for
+`http_get` that array is always empty (CDP can't supply it), so in
+practice only `dns_lookup` populates answers. An **HTTPS (type 65)**
+answer instead carries `{ answer_type: "HTTPS", priority, target,
+alpn, has_ech_config, ipv4hint, ipv6hint }`: `alpn` exposes whether the
+target steers clients onto HTTP/3 (an `h3`-first list is what makes a
+browser prefer QUIC), and `has_ech_config` flags that the target
+publishes an ECH key. Both feed the client-variant rules in
+`SIGNAL_RULES.md` (`http3_specifically_degraded`,
+`tls_hang_impersonation_specific`); the A/AAAA rules ignore HTTPS
+answers by `answer_type`. `failure` codes (`dns_nxdomain`,
 `dns_servfail`, `dns_refused`, `dns_timeout`) and timing conventions
 are shared across both checks.
 
@@ -572,6 +597,25 @@ ours and extensible.
 - `tls_protocol_version_mismatch` — server rejected offered TLS version
 - `tls_closed_during_handshake` — RST mid-handshake; a DPI signature
 
+### QUIC / HTTP-3 stage
+
+Reached only when a probe negotiates HTTP/3 — a target whose HTTPS
+record advertises `h3`, or an `http_get` with
+`config.pinned_http_version == "3"`. QUIC rides UDP/443, so it is a
+distinct interference surface from the TCP path: a network can throttle
+or tear down QUIC while leaving HTTP/2-over-TCP to the same target
+intact (see `http3_specifically_degraded` in `SIGNAL_RULES.md`).
+
+- `quic_handshake_timeout` — QUIC/TLS handshake never completed within
+  timeout; UDP/443 to the target is black-holed or throttled to zero.
+- `quic_handshake_failed` — QUIC transport or crypto handshake failed
+  for a reason not fitting a more specific code.
+- `quic_connection_closed` — the QUIC session was shut down abruptly (a
+  `CONNECTION_CLOSE`, or the teardown curl surfaces as *"QUIC connection
+  has been shut down"*), typically after some data flowed — a
+  throttling / tampering signature when HTTP/2 over TCP to the same
+  target succeeds.
+
 ### HTTP stage
 
 - `http_request_timeout` — couldn't send request within timeout
@@ -651,6 +695,7 @@ partial hop/timing record on a pre-response failure):
 | `ERR_CERT_AUTHORITY_INVALID` | `tls_cert_unknown_ca` | `tls_handshake` |
 | `ERR_CERT_COMMON_NAME_INVALID` | `tls_cert_hostname_mismatch` | `tls_handshake` |
 | `ERR_EMPTY_RESPONSE` / `ERR_CONNECTION_RESET` (post-headers) | `http_body_truncated` | `body_transfer` |
+| `ERR_QUIC_PROTOCOL_ERROR` / `ERR_QUIC_HANDSHAKE_FAILED` | `quic_connection_closed` / `quic_handshake_failed` | `tls_handshake` / `body_transfer` (best-effort) |
 | anything else | `unknown_failure` (raw `errorText` kept) | best-effort |
 
 Not every failure is a `net::ERR_*`. A **body stall** is the notable
@@ -770,7 +815,10 @@ later iterations:
   `CONFIG_FILE.md`. Assumption here: most `config.*` fields are
   overridable.
 - **Cross-probe signals** (comparisons across paths, across time,
-  across impersonation profiles) — `SIGNAL_RULES.md`.
+  across impersonation profiles, across pinned protocol version) —
+  `SIGNAL_RULES.md`; the profile and protocol comparisons are the
+  `tls_hang_impersonation_specific` and `http3_specifically_degraded`
+  rules.
 - **Full OONI failure-string cross-reference table.** Not in v0; to
   be produced alongside probe engine implementation.
 - **Alternative `http_get` backends.** Playwright is the v0
