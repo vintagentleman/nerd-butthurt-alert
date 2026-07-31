@@ -13,7 +13,7 @@ A companion to `ARCHITECTURE.md`, `PROBE_PAYLOAD.md`, and
 - The **per-rule config namespace** — including enable flags and
   confidence values — which lives in the global configuration file,
   not in code.
-- The **v0 catalogue** of 17 rules across 7 categories.
+- The **v0 catalogue** of 19 rules across 8 categories.
 - A **convention for adding new rules** so the engine is genuinely
   extensible — adding a rule means dropping in a new file.
 
@@ -345,7 +345,7 @@ the engine actually reads `name` from the exported object.
 
 ## The v0 catalogue
 
-Seventeen rules across seven categories. Each entry specifies: a
+Nineteen rules across eight categories. Each entry specifies: a
 description, input scope, fires/clears predicates, evidence shape,
 and the rule's `defaults` block (which is also the implicit schema
 of its config-file namespace, minus the always-implicit `enabled`
@@ -714,6 +714,82 @@ target — classic MITM signature.
   ```toml
   window_minutes = 30
   confidence = 0.95
+  ```
+
+### Client-variant comparison
+
+Same target, same path — but a client-side variable changed: the
+impersonation profile (browser fingerprint) or the pinned HTTP
+version. When the target answers one variant and not another, the
+interference is keyed on *what the client sent*, not on the target or
+the network vantage — a distinction the path- and target-level rules
+cannot draw and would otherwise mis-attribute as a block. Both rules
+require the same target to be probed under more than one variant (the
+impersonation-profile → browser-engine wiring lands in M2); a target
+probed under a single variant never triggers them.
+
+#### `tls_hang_impersonation_specific`
+
+The target completes under one impersonation profile but hangs at the
+TLS handshake under another — the signature of client-fingerprint
+interference rather than a target or network block. Motivating case: a
+DPI that drops ClientHellos carrying Firefox's ECH GREASE extension, so
+the site is reachable under a Chromium profile but times out under
+Firefox. Without this rule that Firefox-only hang reads as
+`tls_handshake_hang` (and, if Firefox is the only profile on every
+path, `target_unreachable_all_paths`) — i.e. "blocked", when the target
+is fine and only this client's ClientHello trips the filter.
+
+- **Input scope:** target-window
+- **Fires when:** `newProbe.check_type == "http_get"` and
+  `newProbe.first_failure_code` is a pre-response failure (e.g.
+  `tls_handshake_timeout`, `tls_closed_during_handshake`), AND within
+  `window_minutes` at least `min_working_profiles` recent http_get
+  probes on the same `(target_name, path_name)` under a *different*
+  `impersonation_profile` reached a stage past `tls_handshake`. The
+  target answers some ClientHello fingerprints but not this one.
+- **Clears when:** the latest http_get on the same `(target, path)`
+  under the affected profile reaches past `tls_handshake`.
+- **Evidence:** `{ probe_ids, path_name, hanging_profile,
+  working_profiles, reached_stage_by_profile, https_rr_has_ech? }` — a
+  DNS HTTPS record carrying an ECH config (see `PROBE_PAYLOAD.md`)
+  alongside a profile-specific hang is the ECH-GREASE fingerprint,
+  recorded as corroboration; the rule itself stays profile-agnostic.
+- **Defaults:**
+  ```toml
+  window_minutes = 30
+  min_working_profiles = 1
+  confidence = 0.8
+  ```
+
+#### `http3_specifically_degraded`
+
+The target completes over HTTP/2 (TCP) but a probe pinned to HTTP/3
+hangs, stalls, or is reset — QUIC-specific interference, a DPI lever
+that throttles or tears down UDP/443 to a target while leaving TCP
+intact. Increasingly relevant when the target's own DNS HTTPS record
+advertises `alpn=h3`, steering real browsers onto the degraded
+protocol; the actionable signal is "force TCP / disable HTTP/3", not
+"target down".
+
+- **Input scope:** target-window
+- **Fires when:** `newProbe.check_type == "http_get"`, its pinned HTTP
+  version (`payload.data.config.pinned_http_version`) is `"3"`, and it
+  failed before `complete` (`quic_handshake_timeout`,
+  `quic_connection_closed`, `http_body_stalled`, or a pre-response
+  reset), AND within `window_minutes` a recent http_get on the same
+  `(target, path)` pinned to `"2"` (or that negotiated `h2`) reached
+  `complete`. Each candidate's pinned version is read from its payload —
+  it is not a hot column.
+- **Clears when:** the latest pinned-`"3"` probe on the same
+  `(target, path)` reaches `complete`, or the target stops advertising
+  `h3` in its HTTPS record.
+- **Evidence:** `{ probe_ids, path_name, h3_failure_code,
+  h2_reached_stage, https_rr_alpn? }`
+- **Defaults:**
+  ```toml
+  window_minutes = 30
+  confidence = 0.8
   ```
 
 ### Performance / degradation
