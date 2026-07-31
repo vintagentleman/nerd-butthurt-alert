@@ -3,4 +3,5 @@ node_modules/
 config/local.toml
 coverage/
 *.log
+.claude
 .superpowers/
