@@ -194,7 +194,7 @@ in code. Catalogue and contract in `SIGNAL_RULES.md`.
 
 **Metrics exporter.** A minimal HTTP endpoint (`node:http`, no web
 framework) serving Prometheus text-format metrics at `/metrics`,
-built on `prom-client`. It derives a bounded set of gauges and
+built on `@prometheus-io/client`. It derives a bounded set of gauges and
 counters — probe up/down, last latency and a latency histogram,
 reached-stage, probe/error counts, active-signal state and confidence
 — from the latest persisted state (seeded at startup, updated
@@ -229,7 +229,7 @@ balance.
 the probe engine, the signals engine, the SQLite store, and the
 metrics exporter all live inside one Node program. The only HTTP it
 serves is `/metrics`, which needs nothing more than `node:http` +
-`prom-client`. The earlier SvelteKit-monolith rationale (form actions,
+`@prometheus-io/client`. The earlier SvelteKit-monolith rationale (form actions,
 a component framework for the matrix/time-series views) is moot now
 that Grafana owns visualization. `adapter-node`, `ws`, the SvelteKit
 build — all dropped.
@@ -239,9 +239,10 @@ single-file DB, zero deployment friction, more than fast enough for
 the probe throughput at hand. WAL mode lets Grafana's SQLite datasource
 read the same file concurrently with the engine's writes.
 
-**`prom-client`.** The de-facto Prometheus client for Node. Provides
-the registry, gauge/counter/histogram primitives, and the text
-exposition format. Zero-config integration with Prometheus scraping.
+**`@prometheus-io/client`.** The Prometheus project's official Node
+client; `prom-client` was deprecated in its favour in 2026-08. Provides the registry, gauge/counter/histogram primitives
+(label names typed per metric), and the text exposition format.
+Zero-config integration with Prometheus scraping.
 
 **Prometheus + Grafana.** The visualization and alerting stack, run
 as standard containers. Prometheus scrapes `/metrics` and stores the

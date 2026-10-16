@@ -47,7 +47,7 @@ That split is the whole design.
 ### Transport
 
 A minimal HTTP listener (`node:http`, no web framework) serving the
-Prometheus text exposition format, built on `prom-client`. Bind host,
+Prometheus text exposition format, built on `@prometheus-io/client`. Bind host,
 port, and path come from `[metrics]` in the config (see
 `CONFIG_FILE.md`); defaults to `127.0.0.1:9974/metrics`.
 

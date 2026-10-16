@@ -88,6 +88,8 @@ Latest stable. A standalone `tsconfig.json` (no framework to extend):
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "module": "nodenext",
@@ -98,12 +100,17 @@ Latest stable. A standalone `tsconfig.json` (no framework to extend):
 
 `strict` + `noUncheckedIndexedAccess` together are the meaningful
 upgrade over a casual setup; they catch the bulk of common bugs.
+`erasableSyntaxOnly` exists because `node src/index.ts` runs on Node's
+native type stripping, which rejects enums, namespaces and parameter
+properties at runtime — `tsc` rejects them first.
 
 ## ESLint
 
 ESLint 10+ flat config (`eslint.config.js`). Required plugin:
 
 - **`typescript-eslint`** (v8+) for TS rules
+- **`eslint-plugin-simple-import-sort`** — imports and exports sorted,
+  autofixable (`eslint --fix`)
 
 ESLint's job is **lint** (correctness, smells, bug patterns), not
 **format**. Formatting is Prettier's job; stylistic rules in ESLint
@@ -253,30 +260,15 @@ ready to commit after one install.
 
 ### `.githooks/pre-commit`
 
-Runs Prettier (check), ESLint, markdownlint on staged files only;
-runs `tsc --noEmit` across the project (fast enough at this size that
-per-file filtering isn't worth the complexity).
+Runs `pnpm check`, the single whole-project gate: `tsc --noEmit`,
+ESLint (`--max-warnings 0`), Prettier check, markdownlint, Vitest.
+Whole-project, not staged-only: at this size the full run takes
+seconds, and staged-only filtering misses cross-file breakage.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
-[[ -z "$staged" ]] && exit 0
-
-code=$(echo "$staged" | grep -E '\.(ts|js)$' || true)
-md=$(echo "$staged"   | grep -E '\.md$'      || true)
-
-if [[ -n "$code" ]]; then
-  echo "$code" | xargs pnpm prettier --check
-  echo "$code" | xargs pnpm eslint --max-warnings 0
-fi
-
-if [[ -n "$md" ]]; then
-  echo "$md" | xargs pnpm markdownlint-cli2
-fi
-
-pnpm tsc --noEmit
+```sh
+#!/bin/sh
+set -e
+pnpm check
 ```
 
 ### `.githooks/commit-msg`
