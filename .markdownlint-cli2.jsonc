@@ -6,5 +6,5 @@
 		"MD033": false,
 	},
 	"globs": ["**/*.md"],
-	"ignores": ["node_modules", "docs/superpowers", "docs/specs", ".superpowers"],
+	"ignores": ["node_modules", "docs/specs", ".superpowers"],
 }

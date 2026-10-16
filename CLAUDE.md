@@ -10,9 +10,11 @@ stale and should be fixed.
 `docs/specs/` (`ARCHITECTURE`, `OBSERVABILITY`, `PROBE_PAYLOAD`,
 `STORAGE_SCHEMA`, `SIGNAL_RULES`, `CONFIG_FILE`, `PATH_DEPLOYMENTS`,
 `TOOLING`) is the design. Implementation conforms to the specs, not the
-other way round. Plans under `docs/superpowers/plans/` only sequence and
-operationalise what the specs already say — they don't introduce new
-design decisions.
+other way round. Specs are committed; plans are not — they live in
+`~/.claude/specs/nerd-butthurt-alert/` (roadmap + one plan per
+milestone), with SDD ledgers in the gitignored `.superpowers/`. Plans
+only sequence and operationalise what the specs already say — they
+don't introduce new design decisions.
 
 ## Vertical slice, don't chase surface
 
