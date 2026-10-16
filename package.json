@@ -20,23 +20,23 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "croner": "^9.0.0",
-    "playwright": "^1.50.0",
+    "croner": "^10.0.1",
+    "playwright": "^1.64.1",
     "prom-client": "^15.1.3",
-    "smol-toml": "^1.4.0",
-    "zod": "^4.0.0"
+    "smol-toml": "^1.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
-    "@eslint/js": "^10.0.0",
-    "@types/node": "^26.0.1",
-    "@vitest/coverage-v8": "^3.0.0",
-    "eslint": "^10.0.0",
-    "markdownlint-cli2": "^0.18.0",
-    "prettier": "^3.4.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.0.0",
-    "vitest": "^3.0.0"
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "^5.0.4",
+    "eslint": "^10.12.0",
+    "markdownlint-cli2": "^0.23.3",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.4"
   }
 }
