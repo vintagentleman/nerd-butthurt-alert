@@ -1,20 +1,20 @@
 # CLAUDE.md
 
 Durable, agent-facing conventions for `nerd-butthurt-alert`. This file is
-the quick-reference; the full v0 specs in `docs/specs/` are the source of
-truth — when this file and a spec disagree, the spec wins and this file is
-stale and should be fixed.
+the quick-reference; the full v0 specs are the source of truth — when
+this file and a spec disagree, the spec wins and this file is stale and
+should be fixed.
 
 ## Spec is source of truth
 
-`docs/specs/` (`ARCHITECTURE`, `OBSERVABILITY`, `PROBE_PAYLOAD`,
-`STORAGE_SCHEMA`, `SIGNAL_RULES`, `CONFIG_FILE`, `PATH_DEPLOYMENTS`,
-`TOOLING`) is the design. Implementation conforms to the specs, not the
-other way round. Specs are committed; plans are not — they live in
-`~/.claude/specs/nerd-butthurt-alert/` (roadmap + one plan per
-milestone), with SDD ledgers in the gitignored `.superpowers/`. Plans
-only sequence and operationalise what the specs already say — they
-don't introduce new design decisions.
+No docs live in the repo. Specs and plans are in
+`~/.claude/specs/nerd-butthurt-alert/`, never committed: the specs
+(`ARCHITECTURE`, `OBSERVABILITY`, `PROBE_PAYLOAD`, `STORAGE_SCHEMA`,
+`SIGNAL_RULES`, `CONFIG_FILE`, `PATH_DEPLOYMENTS`, `TOOLING`) are the
+design, beside the roadmap and one plan per milestone. SDD ledgers go in
+the gitignored `.superpowers/`. Implementation conforms to the specs,
+not the other way round. Plans only sequence and operationalise what the
+specs already say — they don't introduce new design decisions.
 
 ## Vertical slice, don't chase surface
 
@@ -35,7 +35,7 @@ pnpm, TypeScript strict (`nodenext` + `verbatimModuleSyntax` +
 extension), ESLint 10 flat config + `typescript-eslint`, Prettier,
 `markdownlint-cli2`, Vitest, `commitlint`. No CI, no Renovate/Dependabot,
 no spellcheck — single-developer personal project, re-evaluate only if
-that changes. Full rationale: `docs/specs/TOOLING.md`.
+that changes. Full rationale: `TOOLING.md`.
 
 ## Git hooks
 
@@ -93,10 +93,10 @@ process.
 **What lives in config, not the DB:** targets, paths, per-rule tuning,
 shape-detection phrase lists — anything static and operator-authored.
 **What lives in the DB, not config:** only `probes` and `signals` rows
-(see `docs/specs/STORAGE_SCHEMA.md`). **What lives in neither, ever:**
+(see `STORAGE_SCHEMA.md`). **What lives in neither, ever:**
 secrets — path-side credentials come from env vars / `pass` /
-`secret-tool` / Docker secrets per `docs/specs/PATH_DEPLOYMENTS.md`,
-never written into a TOML file. Full schema: `docs/specs/CONFIG_FILE.md`.
+`secret-tool` / Docker secrets per `PATH_DEPLOYMENTS.md`,
+never written into a TOML file. Full schema: `CONFIG_FILE.md`.
 
 ## The `nba_` metric contract
 
@@ -121,4 +121,4 @@ metric is prefixed `nba_`.
   that's the signal to put it in SQLite instead.
 
 Full inventory and the `reached_stage` ordinal mapping:
-`docs/specs/OBSERVABILITY.md`.
+`OBSERVABILITY.md`.
