@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import type { ReachedStage } from './types.ts';
+
 import { mapNetError } from './failure.ts';
+import type { ReachedStage } from './types.ts';
 
 // Table-driven per PROBE_PAYLOAD.md "Deriving the taxonomy from CDP
 // (http_get)". Each errorText mirrors how Playwright actually surfaces a

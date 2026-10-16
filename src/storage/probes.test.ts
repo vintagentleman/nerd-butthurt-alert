@@ -2,7 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+
 import type { ProbeInsert } from '../probe/types.ts';
 import { openDatabase } from './db.ts';
 import { runMigrations } from './migrate.ts';

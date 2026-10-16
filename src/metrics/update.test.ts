@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import type { ProbeMetricInput } from '../probe/types.ts';
 import { buildRegistry } from './registry.ts';
 import { applyProbeToMetrics, setProbeGauges, STAGE_ORDINAL } from './update.ts';

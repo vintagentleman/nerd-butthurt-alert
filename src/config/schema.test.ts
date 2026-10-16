@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest';
+
+import { DEFAULT_CONFIG } from './defaults.ts';
 import {
 	appConfigSchema,
 	metricsSchema,
@@ -9,7 +11,6 @@ import {
 	storageSchema,
 	targetSchema,
 } from './schema.ts';
-import { DEFAULT_CONFIG } from './defaults.ts';
 
 describe('metricsSchema', () => {
 	test('accepts a valid metrics block', () => {

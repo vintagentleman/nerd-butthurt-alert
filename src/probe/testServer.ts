@@ -1,5 +1,5 @@
-import { createServer } from 'node:http';
 import type { Server } from 'node:http';
+import { createServer } from 'node:http';
 
 // A tiny node:http fixture for http_get.test.ts (T6) and the T10 sweep
 // integration test. Routes:

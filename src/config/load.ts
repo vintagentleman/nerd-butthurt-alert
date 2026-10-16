@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
 import { parse as parseToml } from 'smol-toml';
+
 import { DEFAULT_CONFIG } from './defaults.ts';
 import { deepMerge } from './merge.ts';
-import { appConfigSchema, type AppConfig } from './schema.ts';
+import { type AppConfig, appConfigSchema } from './schema.ts';
 
 const KNOWN_SECTIONS = ['metrics', 'storage', 'scheduler', 'probes', 'paths', 'targets'] as const;
 

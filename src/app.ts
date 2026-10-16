@@ -1,15 +1,16 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+
 import { loadConfig } from './config/load.ts';
 import type { AppConfig } from './config/schema.ts';
-import { buildRegistry } from './metrics/registry.ts';
-import type { Metrics } from './metrics/registry.ts';
 import { startExporter } from './metrics/exporter.ts';
+import type { Metrics } from './metrics/registry.ts';
+import { buildRegistry } from './metrics/registry.ts';
 import { seedMetrics } from './metrics/seed.ts';
 import { applyProbeToMetrics } from './metrics/update.ts';
-import { runHttpGet } from './probe/http_get.ts';
 import type { HttpGetArgs } from './probe/http_get.ts';
+import { runHttpGet } from './probe/http_get.ts';
 import { mergeProbeConfig } from './probe/probeConfig.ts';
 import type { ProbeInsert, ProbeMetricInput, ProbePayload } from './probe/types.ts';
 import { startScheduler } from './scheduler/scheduler.ts';

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import { detectShapeSignals } from './shape.ts';
 
 const NO_PHRASES = { unavailability_phrases: [] };

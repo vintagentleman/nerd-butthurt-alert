@@ -2,12 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+
 import type { ProbeInsert } from '../probe/types.ts';
-import { insertProbe } from '../storage/probes.ts';
 import { openDatabase } from '../storage/db.ts';
 import { runMigrations } from '../storage/migrate.ts';
 import { MIGRATIONS } from '../storage/migrations/index.ts';
+import { insertProbe } from '../storage/probes.ts';
 import { buildRegistry } from './registry.ts';
 import { seedMetrics } from './seed.ts';
 

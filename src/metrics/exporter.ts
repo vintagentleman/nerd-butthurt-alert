@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+
 import type { Metrics } from './registry.ts';
 
 export function startExporter(

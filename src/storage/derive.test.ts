@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import type { ProbeHop, ProbePayload } from '../probe/types.ts';
 import { deriveFirstFailureCode, deriveProbeColumns } from './derive.ts';
 

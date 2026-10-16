@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+
 import { latestProbesPerCell } from '../storage/probes.ts';
 import type { Metrics } from './registry.ts';
 import { setProbeGauges } from './update.ts';

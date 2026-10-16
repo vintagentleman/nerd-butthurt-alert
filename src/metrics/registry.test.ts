@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import { buildRegistry } from './registry.ts';
 
 describe('buildRegistry', () => {

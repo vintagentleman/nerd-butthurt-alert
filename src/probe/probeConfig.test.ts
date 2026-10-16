@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+
 import type { ProbesConfig } from '../config/schema.ts';
 import { mergeProbeConfig } from './probeConfig.ts';
 

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+
 import type { ProbeInsert, ProbeMetricInput } from '../probe/types.ts';
 
 export function insertProbe(db: DatabaseSync, row: ProbeInsert): void {

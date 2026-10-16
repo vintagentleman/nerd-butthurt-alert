@@ -1,8 +1,9 @@
-import { chromium } from 'playwright';
 import type { Request, Response } from 'playwright';
+import { chromium } from 'playwright';
+
 import { mapNetError } from './failure.ts';
-import { detectShapeSignals } from './shape.ts';
 import type { ShapeDetectionConfig } from './shape.ts';
+import { detectShapeSignals } from './shape.ts';
 import type { PathRole, ProbeHop, ProbePayload, RedirectChainEntry } from './types.ts';
 
 export interface HttpGetArgs {

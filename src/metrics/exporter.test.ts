@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { buildRegistry } from './registry.ts';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
 import { startExporter } from './exporter.ts';
+import { buildRegistry } from './registry.ts';
 
 describe('exporter', () => {
 	const servers: Server[] = [];

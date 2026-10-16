@@ -1,5 +1,6 @@
 import { Cron } from 'croner';
 import { describe, expect, test } from 'vitest';
+
 import { makeGuarded, secondsToCronPattern, startScheduler } from './scheduler.ts';
 
 describe('secondsToCronPattern', () => {

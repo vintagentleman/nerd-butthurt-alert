@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+
 import { deriveFirstFailureCode } from '../storage/derive.ts';
 import { runHttpGet } from './http_get.ts';
-import { findUnusedPort, startTestServer } from './testServer.ts';
 import type { TestServer } from './testServer.ts';
+import { findUnusedPort, startTestServer } from './testServer.ts';
 
 const PATH = { name: 'direct', role: 'direct' as const, tags: [] };
 const SHAPE = { unavailability_phrases: [] };

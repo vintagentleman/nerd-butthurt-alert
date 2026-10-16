@@ -3,14 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+
 import { buildSweep, ensureParentDir } from './app.ts';
 import type { AppConfig } from './config/schema.ts';
-import { buildRegistry } from './metrics/registry.ts';
 import type { Metrics } from './metrics/registry.ts';
+import { buildRegistry } from './metrics/registry.ts';
 import { runHttpGet } from './probe/http_get.ts';
-import { startTestServer } from './probe/testServer.ts';
 import type { TestServer } from './probe/testServer.ts';
+import { startTestServer } from './probe/testServer.ts';
 import { openDatabase } from './storage/db.ts';
 import { runMigrations } from './storage/migrate.ts';
 import { MIGRATIONS } from './storage/migrations/index.ts';
