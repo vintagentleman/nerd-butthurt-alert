@@ -43,8 +43,8 @@ every `pnpm install`, so a fresh clone is hook-ready after one install.
 `.githooks/pre-commit` and `.githooks/commit-msg` must be executable
 (`chmod +x .githooks/*`) — re-run that if hooks ever stop firing.
 
-- `pre-commit`: `eslint . --max-warnings 0`, `prettier --check .`,
-  `tsc --noEmit`, `vitest run`. All must pass before a commit lands.
+- `pre-commit`: `pnpm check` — typecheck, lint (`--max-warnings 0`),
+  format check, markdownlint, Vitest. All must pass before a commit lands.
 - `commit-msg`: rejects any `Co-Authored-By:` trailer, then runs
   `commitlint --edit`.
 

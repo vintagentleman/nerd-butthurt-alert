@@ -13,11 +13,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "md:lint": "markdownlint-cli2 \"**/*.md\"",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git config core.hooksPath .githooks",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm md:lint && pnpm test"
   },
   "dependencies": {
     "croner": "^10.0.1",
