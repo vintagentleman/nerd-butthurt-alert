@@ -5,7 +5,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     ports:
-      - '9090:9090'
+      - '127.0.0.1:9090:9090'
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     extra_hosts:
