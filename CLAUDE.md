@@ -65,12 +65,6 @@ Strict Conventional Commits, enforced by `commitlint`:
   hook regardless of who/what authored the commit. No `Signed-off-by:`
   either (no DCO process here).
 
-## Push policy
-
-**Never push.** No agent runs `git push` (or any push variant,
-force or otherwise) without the user explicitly doing it themselves at
-the prompt. Commit and stop; pushing is a human action in this project.
-
 ## Layered config model
 
 Runtime config is TOML, layered and merged once at startup (no
