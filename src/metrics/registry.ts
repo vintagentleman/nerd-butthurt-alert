@@ -1,4 +1,4 @@
-import { Counter, Gauge, Histogram, Registry } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry } from '@prometheus-io/client';
 
 // The full `nba_*` metric inventory (OBSERVABILITY.md "Metric inventory").
 // One Registry per buildRegistry() call — no shared/default registry, so
@@ -6,17 +6,18 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 // leak series across instances.
 export interface Metrics {
 	registry: Registry;
-	probeUp: Gauge;
-	probeReachedStage: Gauge;
-	probeLatency: Gauge;
-	probeDuration: Histogram;
-	probeLastTimestamp: Gauge;
-	probesTotal: Counter;
-	probeErrors: Counter;
-	buildInfo: Gauge;
+	probeUp: Gauge<CellLabel>;
+	probeReachedStage: Gauge<CellLabel>;
+	probeLatency: Gauge<CellLabel>;
+	probeDuration: Histogram<CellLabel>;
+	probeLastTimestamp: Gauge<CellLabel>;
+	probesTotal: Counter<CellLabel | 'outcome'>;
+	probeErrors: Counter<CellLabel | 'code'>;
+	buildInfo: Gauge<'version' | 'node_version'>;
 }
 
 const CELL_LABELS = ['target', 'path', 'check_type'] as const;
+type CellLabel = (typeof CELL_LABELS)[number];
 
 // OBSERVABILITY.md leaves histogram buckets open ("generic latency set,
 // tune later") — this is that explicit ms-latency set.

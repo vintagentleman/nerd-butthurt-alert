@@ -99,7 +99,7 @@ never written into a TOML file. Full schema: `docs/specs/CONFIG_FILE.md`.
 ## The `nba_` metric contract
 
 The service's only external interface is `GET /metrics` (Prometheus text
-exposition, via `prom-client` + `node:http`, no web framework). Every
+exposition, via `@prometheus-io/client` + `node:http`, no web framework). Every
 metric is prefixed `nba_`.
 
 - **Gauges** (`*_up`, `*_reached_stage`, `*_latency_ms`,
